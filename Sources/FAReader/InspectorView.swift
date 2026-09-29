@@ -14,7 +14,7 @@ struct InspectorView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 140)
+                .frame(maxHeight: 90)
                 if h.highlightColor != .noteOnly {
                     HStack(spacing: 10) {
                         ForEach(HighlightColor.highlightColors, id: \.self) { c in
@@ -35,7 +35,7 @@ struct InspectorView: View {
                 TextEditor(text: $model.noteDraft)
                     .focused($noteFocused)
                     .font(.body)
-                    .frame(minHeight: 100)
+                    .frame(minHeight: 70, maxHeight: 120)
                     .border(Color.secondary.opacity(0.3))
                     .onChange(of: noteFocused) {
                         model.noteFocused = noteFocused
@@ -49,8 +49,13 @@ struct InspectorView: View {
                 if !tags.isEmpty {
                     Text(tags.map { "#\($0)" }.joined(separator: " ")).font(.caption).foregroundStyle(.secondary)
                 }
-                Spacer()
-                Button("Delete", role: .destructive) { model.deleteSelected() }
+                HStack {
+                    Button("Delete", role: .destructive) { model.deleteSelected() }
+                    Spacer()
+                    Button("Done") { model.select(nil) }
+                        .keyboardShortcut(.cancelAction)
+                }
+                .controlSize(.small)
             }
             .padding(12)
         }

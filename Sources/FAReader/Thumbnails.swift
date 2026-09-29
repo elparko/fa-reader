@@ -27,7 +27,7 @@ enum PageMatches {
 }
 
 final class Thumbnailer: @unchecked Sendable {
-    static let width: CGFloat = 64
+    static let width: CGFloat = 120
 
     private let queue = DispatchQueue(label: "fa-reader.thumbnails", qos: .userInitiated)
     private let document: PDFDocument?

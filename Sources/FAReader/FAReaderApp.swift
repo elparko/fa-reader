@@ -9,9 +9,12 @@ struct FAReaderApp: App {
     var body: some Scene {
         Window("FA Reader", id: "main") {
             ContentView(model: model)
-                .frame(minWidth: 900, minHeight: 600)
+                .frame(minWidth: 480, minHeight: 400)
         }
-        .commands { AppCommands(model: model) }
+        .commands {
+            SidebarCommands()
+            AppCommands(model: model)
+        }
     }
 }
 
@@ -95,7 +98,7 @@ struct AppCommands: Commands {
             Button("Zoom to Fit Width") { model.fitWidth() }.keyboardShortcut("9")
         }
         CommandGroup(after: .textEditing) {
-            Button("Search") { model.focusSearchTick += 1 }.keyboardShortcut("f")
+            Button("Search") { model.focusSearch() }.keyboardShortcut("f")
             Button("Next Result") { model.moveResult(1) }.keyboardShortcut("g")
                 .disabled(model.results.isEmpty)
             Button("Previous Result") { model.moveResult(-1) }.keyboardShortcut("g", modifiers: [.command, .shift])

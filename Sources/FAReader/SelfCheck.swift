@@ -91,6 +91,8 @@ final class SelfCheck {
         check("highlight drawn on page", ourAnnotations(page: graves, id: h.id) == h.rects.count, ourAnnotations(page: graves, id: h.id))
 
         model.select(h.id)
+        check("clicking a highlight opens its popup next to it", model.detailsAnchor.map { $0.intersects(model.pdfView.bounds) } ?? false,
+              model.detailsAnchor.map { "\($0)" } ?? "nil")
         _ = press("3", keyCode: 20)
         await pause()
         check("⌘3 recolors selected highlight pink", (try? store.highlight(id: h.id))??.highlightColor == .pink)
@@ -132,7 +134,9 @@ final class SelfCheck {
 
         model.query = "hyperthyroidism"
         await pause(0.5)
-        if let field = findField(in: model.pdfView.window?.contentView) {
+        if let field = findField(in: model.pdfView.window?.contentView?.superview) {
+            check("search field is in the toolbar", field is NSSearchField && !(field.isDescendant(of: model.pdfView.window!.contentView!)))
+            check("results panel shows while sidebar is hidden", model.showResultsPanel)
             model.pdfView.window?.makeFirstResponder(field)
             await pause()
             let bookResults = model.results.filter { $0.kind == .book }.count
@@ -165,6 +169,18 @@ final class SelfCheck {
         } else {
             check("find search field", false)
         }
+        model.query = "graves"
+        model.showResultsPanel = true
+        if let window = model.pdfView.window {
+            window.setContentSize(NSSize(width: 760, height: 700))
+            await pause(0.8)
+            if let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: report.deletingLastPathComponent().appendingPathComponent("narrow.png"))
+            }
+            check("window can shrink to half-screen width", window.contentView!.bounds.width <= 760, window.contentView!.bounds.width)
+        }
+        model.pdfView.window?.makeFirstResponder(model.pdfView)
         model.query = ""
         await pause(0.3)
 

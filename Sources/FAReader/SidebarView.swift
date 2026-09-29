@@ -1,4 +1,5 @@
 import FACore
+import PDFKit
 import SwiftUI
 
 func swatch(_ c: HighlightColor) -> Color {
@@ -9,34 +10,122 @@ func swatch(_ c: HighlightColor) -> Color {
 struct SidebarView: View {
     static let searchPlaceholder = "Search book, highlights, notes"
     @ObservedObject var model: AppModel
-    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                TextField(SidebarView.searchPlaceholder, text: $model.query)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($searchFocused)
-                    .onSubmit {
-                        if model.selectedResultID == nil { model.moveResult(1) } else { model.openSelectedResult() }
-                    }
-                    .onChange(of: model.focusSearchTick) { searchFocused = true }
-                filters
-                if model.isSearching, let ms = model.searchMs {
-                    Text("\(model.results.count) results, \(String(format: "%.1f", ms)) ms")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            Picker("Sidebar", selection: $model.pagesOnly) {
+                Image(systemName: "list.bullet").help("Chapters and result text").tag(false)
+                Image(systemName: "rectangle.grid.1x2").help("Page images only").tag(true)
             }
-            .padding(10)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(8)
             Divider()
             if model.isSearching {
-                resultsList
+                SearchResultsView(model: model, pagesOnly: model.pagesOnly)
+            } else if model.pagesOnly {
+                GeometryReader { geo in
+                    PageThumbnails(pdfView: model.pdfView, width: geo.size.width)
+                }
             } else {
                 chapters
             }
-            Divider()
-            footer
+            if !model.pagesOnly {
+                Divider()
+                footer
+            }
+        }
+    }
+
+    private var chapters: some View {
+        VStack(spacing: 0) {
+            TextField("Go to page (book page, or pdf 12)", text: $model.goToText)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { model.goToEntered() }
+                .padding(10)
+            List(model.sections) { s in
+                Text(s.title)
+                    .fontWeight(s.parent == nil ? .semibold : .regular)
+                    .padding(.leading, s.parent == nil ? 0 : 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.goTo(page: s.start) }
+            }
+            .listStyle(.sidebar)
+        }
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let (done, total) = model.indexProgress {
+                Text("Indexing book text \(done)/\(total)")
+            }
+            if let last = model.lastSync {
+                Text("Synced from \(model.syncedDevices) other device\(model.syncedDevices == 1 ? "" : "s") at \(last.formatted(date: .omitted, time: .shortened))")
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+    }
+}
+
+struct SearchResultsView: View {
+    @ObservedObject var model: AppModel
+    let pagesOnly: Bool
+    var onClose: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !pagesOnly {
+                VStack(alignment: .leading, spacing: 4) {
+                    filters
+                    if let ms = model.searchMs {
+                        Text("\(model.results.count) results, \(String(format: "%.1f", ms)) ms")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(8)
+            }
+            ScrollViewReader { proxy in
+                List(model.results, selection: $model.selectedResultID) { r in
+                    row(r).tag(r.id)
+                }
+                .listStyle(.sidebar)
+                .onChange(of: model.selectedResultID) { _, id in
+                    guard let id else { return }
+                    model.openSelectedResult()
+                    proxy.scrollTo(id)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ r: SearchResult) -> some View {
+        if pagesOnly {
+            ResultThumbnail(model: model, result: r, width: nil)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 2)
+                .help("\(model.label(r.page)): \(r.snippet.replacingOccurrences(of: Searcher.matchStart, with: "").replacingOccurrences(of: Searcher.matchEnd, with: ""))")
+        } else {
+            HStack(alignment: .top, spacing: 8) {
+                ResultThumbnail(model: model, result: r, width: 64)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Image(systemName: icon(r.kind)).foregroundStyle(.secondary)
+                        if let c = r.color {
+                            Circle().fill(swatch(c)).frame(width: 9, height: 9)
+                        }
+                        Text(model.label(r.page)).foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                    Text(model.styled(r.snippet)).lineLimit(4)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -60,38 +149,15 @@ struct SidebarView: View {
                     Text("#\(t)").tag(String?.some(t))
                 }
             }
+            if let onClose {
+                Button(action: onClose) { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Hide results (Cmd+G still steps through them)")
+            }
         }
         .labelsHidden()
         .controlSize(.small)
-    }
-
-    private var resultsList: some View {
-        ScrollViewReader { proxy in
-            List(model.results, selection: $model.selectedResultID) { r in
-                HStack(alignment: .top, spacing: 8) {
-                    ResultThumbnail(model: model, result: r)
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Image(systemName: icon(r.kind)).foregroundStyle(.secondary)
-                            if let c = r.color {
-                                Circle().fill(swatch(c)).frame(width: 9, height: 9)
-                            }
-                            Text(model.label(r.page)).foregroundStyle(.secondary)
-                        }
-                        .font(.caption)
-                        Text(model.styled(r.snippet)).lineLimit(4)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .tag(r.id)
-            }
-            .listStyle(.sidebar)
-            .onChange(of: model.selectedResultID) { _, id in
-                guard let id else { return }
-                model.openSelectedResult()
-                proxy.scrollTo(id)
-            }
-        }
     }
 
     private func icon(_ kind: ResultKind) -> String {
@@ -101,46 +167,12 @@ struct SidebarView: View {
         case .note: "note.text"
         }
     }
-
-    private var chapters: some View {
-        VStack(spacing: 0) {
-            HStack {
-                TextField("Go to page (book page, or pdf 12)", text: $model.goToText)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { model.goToEntered() }
-            }
-            .padding(10)
-            List(model.sections) { s in
-                Text(s.title)
-                    .fontWeight(s.parent == nil ? .semibold : .regular)
-                    .padding(.leading, s.parent == nil ? 0 : 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.goTo(page: s.start) }
-            }
-            .listStyle(.sidebar)
-        }
-    }
-
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if let (done, total) = model.indexProgress {
-                Text("Indexing book text \(done)/\(total)")
-            }
-            if let last = model.lastSync {
-                Text("Synced from \(model.syncedDevices) other device\(model.syncedDevices == 1 ? "" : "s") at \(last.formatted(date: .omitted, time: .standard))")
-            }
-        }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-    }
 }
 
 struct ResultThumbnail: View {
     @ObservedObject var model: AppModel
     let result: SearchResult
+    let width: CGFloat?
     @State private var image: NSImage?
 
     var body: some View {
@@ -151,11 +183,31 @@ struct ResultThumbnail: View {
                 Rectangle().fill(.quaternary).aspectRatio(0.78, contentMode: .fit)
             }
         }
-        .frame(width: Thumbnailer.width)
+        .frame(width: width)
         .overlay(Rectangle().stroke(.separator, lineWidth: 0.5))
         .task(id: "\(result.id)|\(model.query)") {
             let terms = PageMatches.terms(model.query)
             image = await model.thumbnailer?.thumbnail(page: result.page, marks: model.marks(for: result), terms: terms)
         }
+    }
+}
+
+struct PageThumbnails: NSViewRepresentable {
+    let pdfView: PDFView
+    let width: CGFloat
+
+    func makeNSView(context: Context) -> PDFThumbnailView {
+        let view = PDFThumbnailView()
+        view.pdfView = pdfView
+        view.maximumNumberOfColumns = 1
+        view.backgroundColor = .clear
+        view.thumbnailSize = CGSize(width: 110, height: 142)
+        return view
+    }
+
+    func updateNSView(_ view: PDFThumbnailView, context: Context) {
+        let width = max(60, self.width - 30)
+        let size = CGSize(width: width, height: width * 1.3)
+        if abs(view.thumbnailSize.width - size.width) > 4 { view.thumbnailSize = size }
     }
 }

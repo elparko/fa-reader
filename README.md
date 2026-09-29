@@ -45,6 +45,14 @@ For `first aid.pdf`, the folder is `first aid.fa-reader/` next to the PDF:
 
 The app reads other devices' logs every 5 seconds and when it becomes active.
 
+## Layout
+
+- The search field is in the toolbar and always works. Cmd+F focuses it.
+- The sidebar is hidden by default. Show it with the sidebar button in the toolbar or View > Show Sidebar (Cmd+Ctrl+S). With the sidebar hidden, search results appear in a panel under the search field; with it shown, they appear in the sidebar.
+- The button at the top of the sidebar switches between chapters with result text, and page images only (page thumbnails, or result thumbnails while searching).
+- Clicking a highlight opens a small popup next to it with its colors, note and Delete. Done or Esc closes it.
+- The window works down to about 480 points wide, so half a screen is fine.
+
 ## Highlighting
 
 The toolbar, next to the zoom buttons, has a highlighter button and four color dots.

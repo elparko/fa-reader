@@ -79,7 +79,6 @@ final class AppModel: ObservableObject {
     @Published var noteDraft = ""
     @Published var noteFocused = false
     @Published var noteFocusTick = 0
-    @Published var focusSearchTick = 0
     @Published var indexProgress: (Int, Int)?
     @Published var lastSync: Date?
     @Published var syncedDevices = 0
@@ -91,7 +90,19 @@ final class AppModel: ObservableObject {
     @Published var showImport = false
     @Published var importPreview: ImportPreview?
 
-    @Published var query = "" { didSet { runSearch() } }
+    @Published var query = "" {
+        didSet {
+            if query != oldValue, !query.isEmpty { showResultsPanel = true }
+            runSearch()
+        }
+    }
+    @Published var showResultsPanel = false
+    private var popover: NSPopover?
+    private var scrollObserver: Any?
+    private var ignoreScrollUntil = Date.distantPast
+    @Published var pagesOnly = UserDefaults.standard.bool(forKey: "pagesOnly") {
+        didSet { if !isTestRun { UserDefaults.standard.set(pagesOnly, forKey: "pagesOnly") } }
+    }
     @Published var colorFilter: HighlightColor? { didSet { runSearch() } }
     @Published var sectionFilter: Int? { didSet { runSearch() } }
     @Published var tagFilter: String? { didSet { runSearch() } }
@@ -129,7 +140,10 @@ final class AppModel: ObservableObject {
     private init() {
         pdfView.configure()
         installKeyMonitor()
-        pdfView.onHit = { [weak self] id in self?.select(id) }
+        pdfView.onHit = { [weak self] id in
+            self?.showResultsPanel = false
+            self?.select(id)
+        }
         pdfView.onSelectionEnded = { [weak self] in self?.selectionEnded() }
         pdfView.onColor = { [weak self] c in self?.applyColor(c) }
         pdfView.onEditNote = { [weak self] in self?.focusNote() }
@@ -209,6 +223,7 @@ final class AppModel: ObservableObject {
         pdfURL = url
         document = doc
         pdfView.document = doc
+        watchScrolling()
         if let last = UserDefaults.standard.object(forKey: "lastPage:\(url.path)") as? Int, let page = doc.page(at: last) {
             pdfView.go(to: page)
         }
@@ -354,7 +369,7 @@ final class AppModel: ObservableObject {
         let index = currentPageIndex
         if let url = pdfURL, !isTestRun { UserDefaults.standard.set(index, forKey: "lastPage:\(url.path)") }
         let pdf = "PDF \(index + 1) of \(pageCount)"
-        pageLabel = printed(index).map { "p. \($0) · \(pdf)" } ?? pdf
+        pageLabel = printed(index).map { "p. \($0) · \(index + 1)/\(pageCount)" } ?? pdf
     }
 
     func goTo(page: Int) {
@@ -484,6 +499,49 @@ final class AppModel: ObservableObject {
         if selected == nil { selectedID = nil }
         noteDraft = selected?.note ?? ""
         updateOutline()
+        if selected == nil { hideDetails() } else { showDetails() }
+    }
+
+    func showDetails() {
+        popover?.close()
+        popover = nil
+        guard let h = selected, let page = document?.page(at: h.page), !h.rects.isEmpty, pdfView.window != nil else { return }
+        let union = h.rects.map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }.reduce(CGRect.null) { $0.union($1) }
+        let rect = pdfView.convert(union, from: page)
+        guard rect.intersects(pdfView.bounds) else { return }
+        if isTestRun {
+            detailsAnchor = rect
+            return
+        }
+        let p = NSPopover()
+        p.behavior = .applicationDefined
+        p.animates = false
+        p.contentViewController = NSHostingController(rootView: InspectorView(model: self).frame(width: 280))
+        p.show(relativeTo: rect.intersection(pdfView.bounds), of: pdfView, preferredEdge: .maxY)
+        popover = p
+        ignoreScrollUntil = Date().addingTimeInterval(0.4)
+    }
+
+    func hideDetails() {
+        detailsAnchor = nil
+        guard let p = popover else { return }
+        flushNote()
+        popover = nil
+        p.close()
+    }
+
+    var detailsShown: Bool { popover?.isShown ?? false }
+    private(set) var detailsAnchor: CGRect?
+
+    private func watchScrolling() {
+        guard let clip = pdfView.documentView?.enclosingScrollView?.contentView, scrollObserver == nil else { return }
+        clip.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let model = AppModel.shared
+                if Date() > model.ignoreScrollUntil { model.hideDetails() }
+            }
+        }
     }
 
     private func refreshSelected() {
@@ -529,6 +587,7 @@ final class AppModel: ObservableObject {
 
     func focusNote() {
         guard selectedID != nil else { return }
+        if !detailsShown { showDetails() }
         noteFocusTick += 1
     }
 
@@ -629,9 +688,10 @@ final class AppModel: ObservableObject {
 
     func goToHighlight(id: String, page: Int) {
         goTo(page: page)
+        if let h = (try? store?.highlight(id: id)) ?? nil, let first = h.rects.first, let p = document?.page(at: h.page) {
+            pdfView.go(to: PDFDestination(page: p, at: CGPoint(x: max(0, first.x - 40), y: first.y + first.h + 120)))
+        }
         select(id)
-        guard let h = selected, let first = h.rects.first, let p = document?.page(at: h.page) else { return }
-        pdfView.go(to: PDFDestination(page: p, at: CGPoint(x: max(0, first.x - 40), y: first.y + first.h + 120)))
     }
 
     func open(result r: SearchResult) {
@@ -668,6 +728,19 @@ final class AppModel: ObservableObject {
     func marks(for r: SearchResult) -> [CGRect]? {
         guard let id = r.highlightID, let h = (try? store?.highlight(id: id)) ?? nil else { return nil }
         return h.rects.map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }
+    }
+
+    func focusSearch() {
+        guard let window = pdfView.window else { return }
+        func find(_ view: NSView) -> NSSearchField? {
+            if let f = view as? NSSearchField, f.placeholderString == SidebarView.searchPlaceholder { return f }
+            for sub in view.subviews { if let f = find(sub) { return f } }
+            return nil
+        }
+        if let root = window.contentView?.superview, let field = find(root) {
+            window.makeFirstResponder(field)
+            showResultsPanel = true
+        }
     }
 
     var searchFieldFocused: Bool {

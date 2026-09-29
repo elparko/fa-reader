@@ -119,13 +119,29 @@ struct ReaderView: NSViewRepresentable {
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    @AppStorage("sidebarShown") private var sidebarShown = false
+
+    private var visibility: Binding<NavigationSplitViewVisibility> {
+        Binding(get: { sidebarShown ? .all : .detailOnly },
+                set: { v in if !model.isTestRun { sidebarShown = v != .detailOnly } })
+    }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: visibility) {
             SidebarView(model: model)
-                .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
+                .navigationSplitViewColumnWidth(min: 110, ideal: model.pagesOnly ? 150 : 290, max: 420)
         } detail: {
             ReaderView(model: model)
+                .overlay(alignment: .topTrailing) {
+                    if !sidebarShown, model.isSearching, model.showResultsPanel {
+                        SearchResultsView(model: model, pagesOnly: false, onClose: { model.showResultsPanel = false })
+                            .frame(width: 340)
+                            .frame(maxHeight: 520)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                            .shadow(radius: 8)
+                            .padding(10)
+                    }
+                }
                 .overlay {
                     if model.document == nil {
                         VStack(spacing: 12) {
@@ -153,23 +169,24 @@ struct ContentView: View {
                         }
                     }
                     ToolbarItemGroup {
-                        Button { model.zoomOut() } label: { Image(systemName: "minus.magnifyingglass") }
-                            .help("Zoom out")
-                        Button { model.zoomIn() } label: { Image(systemName: "plus.magnifyingglass") }
-                            .help("Zoom in")
-                        Button { model.actualSize() } label: { Image(systemName: "1.magnifyingglass") }
-                            .help("Actual size")
-                        Button { model.fitWidth() } label: { Image(systemName: "arrow.left.and.right") }
-                            .help("Zoom to fit width")
+                        ControlGroup {
+                            Button { model.zoomOut() } label: { Image(systemName: "minus.magnifyingglass") }
+                                .help("Zoom out (Cmd+-)")
+                            Button { model.zoomIn() } label: { Image(systemName: "plus.magnifyingglass") }
+                                .help("Zoom in (Cmd+=)")
+                        }
+                        Menu {
+                            Button("Actual Size") { model.actualSize() }
+                            Button("Fit Width") { model.fitWidth() }
+                        } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                            .help("Zoom options")
                     }
                 }
-                .inspector(isPresented: Binding(
-                    get: { model.selected != nil },
-                    set: { if !$0 { model.select(nil) } }
-                )) {
-                    InspectorView(model: model)
-                        .inspectorColumnWidth(min: 260, ideal: 300, max: 400)
-                }
+        }
+        .searchable(text: $model.query, placement: .toolbar, prompt: SidebarView.searchPlaceholder)
+        .onSubmit(of: .search) {
+            model.showResultsPanel = true
+            if model.selectedResultID == nil { model.moveResult(1) } else { model.openSelectedResult() }
         }
         .sheet(isPresented: $model.showHistory) { HistoryView(model: model) }
         .sheet(isPresented: $model.showImport) { ImportView(model: model) }
