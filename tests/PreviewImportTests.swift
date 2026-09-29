@@ -112,6 +112,27 @@ private func manual(_ n: Int, startID: Int, at start: Double) -> [RawAnnotation]
     #expect(PreviewImporter.scan(doc)[0].fingerprint == first[0].fingerprint)
 }
 
+@Test func duplicateFingerprintsAreImportedOnce() {
+    let a = ann(1, page: 3, at: 0)
+    var b = a
+    b.date = base.addingTimeInterval(60)
+    let preview = PreviewImporter.preview(annotations: [a, b], alreadyImported: [])
+    #expect(preview.candidates.count == 1)
+    #expect(preview.plan().ops.count == 1)
+}
+
+@Test func nonFiniteBoundsDoNotCrash() {
+    let doc = PDFDocument()
+    let page = PDFPage()
+    doc.insert(page, at: 0)
+    let h = PDFAnnotation(bounds: CGRect(x: 0, y: 0, width: 3.4e38, height: 3.4e38), forType: .highlight, withProperties: nil)
+    page.addAnnotation(h)
+    let raws = PreviewImporter.scan(doc)
+    #expect(raws.count == 1)
+    #expect(raws[0].rects.isEmpty)
+    #expect(raws[0].bounds.w < 10_000)
+}
+
 private let realPDF = ProcessInfo.processInfo.environment["FA_PDF"]
 
 @Test(.enabled(if: ProcessInfo.processInfo.environment["FA_PDF"] != nil))

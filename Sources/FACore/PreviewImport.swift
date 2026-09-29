@@ -94,14 +94,16 @@ public enum PreviewImporter {
     static func raw(_ a: PDFAnnotation, type: String, page: PDFPage, index: Int) -> RawAnnotation {
         let isNote = type == "FreeText" || type == "Text"
         let clipped = a.bounds.intersection(page.bounds(for: .mediaBox))
-        let bounds = clipped.isNull ? CGRect.zero : clipped
+        let bounds = clipped.isNull || !clipped.isFinite ? CGRect.zero : clipped
         var rects: [CGRect] = []
         if !isNote, let quads = a.quadrilateralPoints {
             for i in stride(from: 0, to: quads.count - 3, by: 4) {
                 let pts = quads[i..<(i + 4)].map { $0.pointValue }
                 let xs = pts.map(\.x), ys = pts.map(\.y)
-                rects.append(CGRect(x: a.bounds.minX + xs.min()!, y: a.bounds.minY + ys.min()!,
-                                    width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!))
+                let rect = CGRect(x: a.bounds.minX + xs.min()!, y: a.bounds.minY + ys.min()!,
+                                  width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+                let inPage = rect.intersection(page.bounds(for: .mediaBox))
+                if !inPage.isNull, inPage.isFinite, !inPage.isEmpty { rects.append(inPage) }
             }
         }
         if rects.isEmpty, isNote { rects = [bounds] }
@@ -154,7 +156,8 @@ public enum PreviewImporter {
     public static func preview(annotations: [RawAnnotation], alreadyImported: Set<String>) -> ImportPreview {
         let bursts = detectBursts(annotations)
         let now = Date().timeIntervalSince1970
-        let candidates = annotations.map { raw -> ImportCandidate in
+        var seen = Set<String>()
+        let candidates = annotations.filter { seen.insert($0.fingerprint).inserted }.map { raw -> ImportCandidate in
             let id = "pv-" + raw.fingerprint
             let burst = raw.date.flatMap { d in bursts.first { d >= $0.start && d <= $0.end }?.id }
             let highlight = Highlight(id: id, page: raw.page, rects: raw.rects, text: raw.text, color: raw.color,
@@ -167,6 +170,10 @@ public enum PreviewImporter {
     public static func preview(document: PDFDocument, store: Store) throws -> ImportPreview {
         preview(annotations: scan(document), alreadyImported: try store.importedHighlightIDs())
     }
+}
+
+extension CGRect {
+    var isFinite: Bool { [minX, minY, width, height].allSatisfy(\.isFinite) }
 }
 
 extension Rect {
