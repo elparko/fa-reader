@@ -102,7 +102,7 @@ final class AppModel: ObservableObject {
     private var renderedAnnotations: [Int: [PDFAnnotation]] = [:]
     private var previewRects: [Int: [CGRect]] = [:]
     private var outline: (page: PDFPage, annotation: PDFAnnotation)?
-    private var runner: SearchRunner?
+    private(set) var runner: SearchRunner?
     private var printedCache: [Int: String?] = [:]
     private var pendingURL: URL?
     private var started = false
@@ -110,14 +110,18 @@ final class AppModel: ObservableObject {
     fileprivate var searchReported = false
     private var timer: Timer?
     private let arguments = CommandLine.arguments
+    var selfCheck: SelfCheck?
 
-    private var measureOpen: Bool { arguments.contains("--measure-open") }
+    var measureOpen: Bool { arguments.contains("--measure-open") }
     private var exitAfterMeasure: Bool { arguments.contains("--exit") }
 
     private init() {
         pdfView.configure()
         pdfView.onHit = { [weak self] id in self?.select(id) }
-        if measureOpen {
+        if let i = arguments.firstIndex(of: "--self-check"), i + 1 < arguments.count {
+            selfCheck = SelfCheck(report: URL(fileURLWithPath: arguments[i + 1]))
+        }
+        if measureOpen || selfCheck != nil {
             pdfView.onFirstDraw = { [weak self] in self?.reportOpenTime() }
         }
         let center = NotificationCenter.default
@@ -239,6 +243,7 @@ final class AppModel: ObservableObject {
     private func reportOpenTime() {
         pdfView.onFirstDraw = nil
         let ms = Date().timeIntervalSince1970 * 1000 - processStartMs()
+        selfCheck?.run(openMs: ms)
         print("open_ms=\(Int(ms.rounded()))")
         fflush(stdout)
         openReported = true
@@ -565,6 +570,7 @@ final class AppModel: ObservableObject {
     }
 
     func confirm(_ message: String, ok: String = "Continue") -> Bool {
+        if let check = selfCheck { check.alerts.append(message); return true }
         let alert = NSAlert()
         alert.messageText = message
         alert.addButton(withTitle: ok)
@@ -573,6 +579,7 @@ final class AppModel: ObservableObject {
     }
 
     func notify(_ message: String, info: String = "") {
+        if let check = selfCheck { check.alerts.append("\(message) \(info)"); return }
         let alert = NSAlert()
         alert.messageText = message
         alert.informativeText = info
@@ -616,7 +623,7 @@ final class AppModel: ObservableObject {
         } else if let page {
             goTo(page: page - 1)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        if selfCheck == nil { NSApp.activate(ignoringOtherApps: true) }
     }
 
     // MARK: Search

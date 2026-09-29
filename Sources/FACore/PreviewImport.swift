@@ -61,6 +61,10 @@ public struct ImportPreview {
 }
 
 public enum PreviewImporter {
+    static func isOwn(_ a: PDFAnnotation) -> Bool {
+        a.userName?.hasPrefix("fa:") == true || a.userName == "fa-selection"
+    }
+
     static let importedTypes: Set<String> = ["Highlight", "Underline", "StrikeOut", "FreeText", "Text"]
 
     static func fnv1a(_ s: String) -> String {
@@ -84,7 +88,7 @@ public enum PreviewImporter {
             guard let page = document.page(at: index) else { continue }
             for a in page.annotations {
                 let type = (a.type ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                guard importedTypes.contains(type) else { continue }
+                guard importedTypes.contains(type), !isOwn(a) else { continue }
                 out.append(raw(a, type: type, page: page, index: index))
             }
         }

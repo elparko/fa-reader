@@ -33,6 +33,9 @@ private func freshDatabase() throws -> Database {
     #expect(BookIndex.printedLabel("7\nx") == "7")
     #expect(BookIndex.printedLabel("12345\nx") == nil)
     #expect(BookIndex.printedLabel("Graves disease\n346") == nil)
+    #expect(BookIndex.printedLabel("568 SEC T ION II I | NEUROLOGY\nx") == "568")
+    #expect(BookIndex.printedLabel("IM MUNO LOG Y ` Immunology S E C T I O N II 113\nx") == "113")
+    #expect(BookIndex.printedLabel("Hernias (continued) 2\nx") == nil)
     #expect(BookIndex.printedLabel("") == nil)
     #expect(BookIndex.printedLabel("\(watermark)") == nil)
 }
@@ -72,6 +75,9 @@ func indexRealBook() throws {
     #expect(lastProgress.0 == document.pageCount && lastProgress.1 == document.pageCount)
     #expect(try BookIndex.isIndexed(db: db, pageCount: document.pageCount))
     #expect(try BookIndex.printedPage(db: db, page: 366) == "346")
+    #expect(try BookIndex.printedPage(db: db, page: 133) == "113")
+    #expect(try BookIndex.printedPage(db: db, page: 397) == "377")
+    #expect(try BookIndex.printedPage(db: db, page: 588) == "568")
     #expect(try BookIndex.pdfPage(forPrinted: "346", db: db) == 366)
     #expect(try db.scalar("SELECT COUNT(*) FROM book_pages WHERE text LIKE 'Www.Medicalstudyzone%'") as? Int64 == 0)
 
@@ -85,4 +91,17 @@ func indexRealBook() throws {
     #expect(!cleaned[0].contains("Medicalstudyzone"))
     #expect(BookIndex.printedLabel(pages[0]) == "12")
     #expect(BookIndex.printedLabel(cleaned[1]) == "13")
+}
+
+@Test func printedLabelsFillBodyPagesFromTheCommonOffset() {
+    var texts = (0..<60).map { _ in "Figure A\nno number here" }
+    for i in stride(from: 20, to: 50, by: 2) { texts[i] = "\(i - 20)\nbody" }
+    texts[21] = "diagram 999\nx"
+    let labels = BookIndex.printedLabels(texts)
+    #expect(labels[20] == "0" || labels[20] == nil)
+    #expect(labels[21] == "1")
+    #expect(labels[35] == "15")
+    #expect(labels[48] == "28")
+    #expect(labels[5] == nil)
+    #expect(labels[55] == nil)
 }

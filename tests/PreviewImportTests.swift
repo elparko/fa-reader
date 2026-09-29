@@ -176,3 +176,17 @@ func realPDFImport() throws {
     #expect(again.candidates.allSatisfy { $0.alreadyImported })
     #expect(again.plan().ops.isEmpty)
 }
+
+@Test func scanSkipsTheAppsOwnInMemoryAnnotations() {
+    let doc = PDFDocument()
+    let page = PDFPage()
+    doc.insert(page, at: 0)
+    let own = PDFAnnotation(bounds: CGRect(x: 10, y: 10, width: 50, height: 12), forType: .highlight, withProperties: nil)
+    own.userName = "fa:abc"
+    let outline = PDFAnnotation(bounds: CGRect(x: 10, y: 10, width: 50, height: 12), forType: .highlight, withProperties: nil)
+    outline.userName = "fa-selection"
+    let preview = PDFAnnotation(bounds: CGRect(x: 10, y: 40, width: 50, height: 12), forType: .highlight, withProperties: nil)
+    preview.userName = "Parker Smith"
+    for a in [own, outline, preview] { page.addAnnotation(a) }
+    #expect(PreviewImporter.scan(doc).count == 1)
+}
