@@ -102,8 +102,7 @@ public enum PreviewImporter {
                 let xs = pts.map(\.x), ys = pts.map(\.y)
                 let rect = CGRect(x: a.bounds.minX + xs.min()!, y: a.bounds.minY + ys.min()!,
                                   width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
-                let inPage = rect.intersection(page.bounds(for: .mediaBox))
-                if !inPage.isNull, inPage.isFinite, !inPage.isEmpty { rects.append(inPage) }
+                if rect.isFinite, !rect.isEmpty, page.bounds(for: .mediaBox).insetBy(dx: -1, dy: -1).contains(rect) { rects.append(rect) }
             }
         }
         if rects.isEmpty, isNote { rects = [bounds] }
