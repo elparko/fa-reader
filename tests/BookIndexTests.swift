@@ -78,3 +78,11 @@ func indexRealBook() throws {
     try BookIndex.index(document: document, into: db)
     #expect(try db.scalar("SELECT COUNT(*) FROM book_fts") as? Int64 == Int64(document.pageCount))
 }
+
+@Test func cleanAndLabelHandleCarriageReturns() {
+    let pages = ["Www.Medicalstudyzone.com\r\n12\r\nbody", "Www.Medicalstudyzone.com\r\n13\r\nmore", "other"]
+    let cleaned = BookIndex.clean(pages)
+    #expect(!cleaned[0].contains("Medicalstudyzone"))
+    #expect(BookIndex.printedLabel(pages[0]) == "12")
+    #expect(BookIndex.printedLabel(cleaned[1]) == "13")
+}

@@ -309,3 +309,21 @@ func searchRealBook() throws {
     #expect(inSection.contains { $0.page == 366 })
     #expect(inSection.allSatisfy { endocrine.pages.contains($0.page) })
 }
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["FA_PDF"] != nil))
+func realBookAsYouTypeLatency() throws {
+    let path = try #require(ProcessInfo.processInfo.environment["FA_PDF"])
+    let document = try #require(PDFDocument(url: URL(fileURLWithPath: path)))
+    let store = try makeStore()
+    try BookIndex.index(document: document, into: store.db)
+    let searcher = Searcher(database: store.db)
+    let queries = ["a", "e", "t", "th", "the", "the a", "of the", "in", "hy", "hyp", "hyperthyroidism", "graves d", "a b c"]
+    var worst = 0.0
+    for query in queries {
+        let start = DispatchTime.now().uptimeNanoseconds
+        _ = try searcher.search(query)
+        worst = max(worst, Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6)
+    }
+    print("real as-you-type worst: \(worst) ms")
+    #expect(worst < 50)
+}

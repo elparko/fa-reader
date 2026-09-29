@@ -45,14 +45,14 @@ public enum BookIndex {
         let repeated = Set(counts.filter { $0.value * 2 > pageTexts.count }.keys)
         guard !repeated.isEmpty else { return pageTexts }
         return pageTexts.map { text in
-            text.split(separator: "\n", omittingEmptySubsequences: false)
+            text.split(whereSeparator: \.isNewline)
                 .filter { !repeated.contains($0.trimmingCharacters(in: .whitespaces)) }
                 .joined(separator: "\n")
         }
     }
 
     static func printedLabel(_ text: String) -> String? {
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        var lines = text.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         if let first = lines.first, first.lowercased().contains("medicalstudyzone") { lines.removeFirst() }
@@ -62,7 +62,7 @@ public enum BookIndex {
     }
 
     private static func firstLine(_ text: String) -> String? {
-        text.split(separator: "\n", omittingEmptySubsequences: true)
+        text.split(whereSeparator: \.isNewline)
             .lazy.map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty }
     }
 }
