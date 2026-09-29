@@ -16,7 +16,12 @@ install: app
 	/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$(CURDIR)/build/FA Reader.app"; \
 	/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/FA Reader.app"
 
+dist: app
+	rm -f "build/FA Reader.zip"
+	ditto -c -k --keepParent "build/FA Reader.app" "build/FA Reader.zip"
+	@echo "build/FA Reader.zip"
+
 clean:
 	rm -rf build .build
 
-.PHONY: build test app run install clean
+.PHONY: build test app run install dist clean

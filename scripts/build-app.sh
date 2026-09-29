@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-swift build -c release
-bin=$(swift build -c release --show-bin-path)
+swift build -c release --arch arm64 --arch x86_64
+bin=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
 app="build/FA Reader.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"

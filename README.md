@@ -14,6 +14,18 @@ It never writes to the PDF. Highlights and notes are stored in a folder next to 
 
 Requires macOS 14 or later and the Swift 6 toolchain.
 
+## Install on another Mac
+
+`make dist` builds `build/FA Reader.zip`, which runs on Apple Silicon and Intel Macs with macOS 14 or later.
+
+1. Copy the zip to the other Mac (iCloud Drive, AirDrop, or a USB drive) and double-click it.
+2. Drag `FA Reader.app` into Applications.
+3. The first time you open it, macOS blocks it because it is not signed with an Apple Developer ID. Open System Settings > Privacy & Security, scroll down, and click Open Anyway next to the FA Reader message. Or run this once in Terminal:
+
+       xattr -dr com.apple.quarantine "/Applications/FA Reader.app"
+
+Highlights sync between Macs through iCloud Drive when both open the same PDF from iCloud Drive. Each Mac writes its own change log in `<book>.fa-reader/changes/` and reads the others' every 5 seconds.
+
 ## Which PDF opens
 
 1. `--pdf <path>` on the command line
