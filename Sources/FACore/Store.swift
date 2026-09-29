@@ -37,6 +37,19 @@ public final class Store {
             maxApplied = key
         }
         try sync()
+        try resumeEditSession()
+    }
+
+    private func resumeEditSession() throws {
+        guard let row = try db.query("""
+            SELECT s.id, s.device_name, s.started, s.kind, s.label, s.undoes, o.ts
+            FROM ops o JOIN sessions s ON s.id = o.session
+            WHERE o.device=? ORDER BY o.seq DESC LIMIT 1
+            """, device).first, row.string("kind") == SessionKind.edit.rawValue else { return }
+        editSession = Session(id: row.string("id"), device: device, deviceName: row.string("device_name"),
+                              started: row.double("started"), kind: .edit, label: row.string("label"),
+                              undoes: row.optionalString("undoes"))
+        lastEditTs = row.double("ts")
     }
 
     static func migrate(_ db: Database) throws {
