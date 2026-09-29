@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if AppModel.shared.selfCheck != nil {
+        if AppModel.shared.selfCheck != nil || AppModel.shared.measureOpen {
             NSApp.setActivationPolicy(.accessory)
             for window in NSApp.windows {
                 window.alphaValue = 0
