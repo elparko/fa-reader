@@ -84,8 +84,8 @@ public final class Store {
 
     public func highlights(page: Int? = nil) throws -> [Highlight] {
         let rows = page == nil
-            ? try db.query("SELECT * FROM highlights ORDER BY page, created")
-            : try db.query("SELECT * FROM highlights WHERE page=? ORDER BY created", page)
+            ? try db.query("SELECT * FROM highlights ORDER BY page, created, id")
+            : try db.query("SELECT * FROM highlights WHERE page=? ORDER BY created, id", page)
         return rows.map(Store.highlight(from:))
     }
 

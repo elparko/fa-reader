@@ -84,6 +84,13 @@ private func opCount(_ store: Store) throws -> Int {
     #expect(try store.highlights().map(\.id) == ["c", "b", "a"])
 }
 
+@Test func highlightsWithSamePageAndCreatedOrderByID() throws {
+    let store = try makeStore(tempFolder())
+    try store.add([makeHighlight("b"), makeHighlight("a"), makeHighlight("c")])
+    #expect(try store.highlights().map(\.id) == ["a", "b", "c"])
+    #expect(try store.highlights(page: 1).map(\.id) == ["a", "b", "c"])
+}
+
 @Test func importedHighlightIDsListsPreviewPrefixedOnly() throws {
     let store = try makeStore(tempFolder())
     try store.add([makeHighlight("pv-1"), makeHighlight("plain")])
