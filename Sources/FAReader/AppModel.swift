@@ -96,6 +96,9 @@ final class AppModel: ObservableObject {
     @Published var sectionFilter: Int? { didSet { runSearch() } }
     @Published var tagFilter: String? { didSet { runSearch() } }
     @Published var results: [SearchResult] = []
+    @Published var selectedResultID: String?
+    private(set) var thumbnailer: Thumbnailer?
+    private var keyMonitor: Any?
     @Published var searchMs: Double?
 
     private var rendered: [Int: [Highlight]] = [:]
@@ -117,6 +120,7 @@ final class AppModel: ObservableObject {
 
     private init() {
         pdfView.configure()
+        installKeyMonitor()
         pdfView.onHit = { [weak self] id in self?.select(id) }
         if let i = arguments.firstIndex(of: "--self-check"), i + 1 < arguments.count {
             selfCheck = SelfCheck(report: URL(fileURLWithPath: arguments[i + 1]))
@@ -201,6 +205,7 @@ final class AppModel: ObservableObject {
         query = ""
         UserDefaults.standard.set(url.path, forKey: "lastPDF")
         runner = try? SearchRunner(databasePath: newStore.folder.databaseURL.path)
+        thumbnailer = Thumbnailer(url: url)
         loadPreviewRects()
         reconcile()
         updatePageLabel()
@@ -605,11 +610,55 @@ final class AppModel: ObservableObject {
     }
 
     private func showMatch(page index: Int) {
-        let term = query.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).first.map(String.init) ?? ""
-        guard !term.isEmpty, let page = document?.page(at: index), let text = page.string,
-              let range = text.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]),
-              let selection = page.selection(for: NSRange(range, in: text)) else { return }
-        pdfView.setCurrentSelection(selection, animate: true)
+        guard let page = document?.page(at: index) else { return }
+        let matches = PageMatches.selections(page: page, terms: PageMatches.terms(query))
+        for m in matches { m.color = .systemYellow }
+        pdfView.highlightedSelections = matches.isEmpty ? nil : matches
+        guard let first = matches.first else { return }
+        pdfView.setCurrentSelection(first, animate: false)
+        pdfView.go(to: first)
+    }
+
+    func moveResult(_ delta: Int) {
+        guard !results.isEmpty else { return }
+        let current = selectedResultID.flatMap { id in results.firstIndex { $0.id == id } }
+        let next = current.map { min(max($0 + delta, 0), results.count - 1) } ?? (delta < 0 ? results.count - 1 : 0)
+        selectedResultID = results[next].id
+    }
+
+    func openSelectedResult() {
+        guard let id = selectedResultID, let r = results.first(where: { $0.id == id }) else { return }
+        open(result: r)
+    }
+
+    func marks(for r: SearchResult) -> [CGRect]? {
+        guard let id = r.highlightID, let h = (try? store?.highlight(id: id)) ?? nil else { return nil }
+        return h.rects.map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }
+    }
+
+    var searchFieldFocused: Bool {
+        guard let editor = pdfView.window?.firstResponder as? NSTextView,
+              let field = editor.delegate as? NSTextField else { return false }
+        return field.placeholderString == SidebarView.searchPlaceholder
+    }
+
+    private func installKeyMonitor() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let code = event.keyCode
+            let plain = event.modifierFlags.intersection([.command, .option, .control]).isEmpty
+            let window = event.window
+            let handled = MainActor.assumeIsolated { () -> Bool in
+                let model = AppModel.shared
+                guard plain, window != nil, window === model.pdfView.window, model.isSearching, !model.results.isEmpty, model.searchFieldFocused else { return false }
+                switch code {
+                case 125: model.moveResult(1)
+                case 126: model.moveResult(-1)
+                default: return false
+                }
+                return true
+            }
+            return handled ? nil : event
+        }
     }
 
     func handle(url: URL) {
@@ -635,11 +684,14 @@ final class AppModel: ObservableObject {
         guard !text.isEmpty || !filter.isEmpty else {
             runner.cancel()
             results = []
+            selectedResultID = nil
+            pdfView.highlightedSelections = nil
             searchMs = nil
             return
         }
         runner.run(text, filter: filter) { [weak self] found, ms in
             Task { @MainActor in
+                if self?.results.map(\.id) != found.map(\.id) { self?.selectedResultID = nil }
                 self?.results = found
                 self?.searchMs = ms
             }

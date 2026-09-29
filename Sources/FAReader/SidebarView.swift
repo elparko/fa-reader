@@ -7,15 +7,19 @@ func swatch(_ c: HighlightColor) -> Color {
 }
 
 struct SidebarView: View {
+    static let searchPlaceholder = "Search book, highlights, notes"
     @ObservedObject var model: AppModel
     @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                TextField("Search book, highlights, notes", text: $model.query)
+                TextField(SidebarView.searchPlaceholder, text: $model.query)
                     .textFieldStyle(.roundedBorder)
                     .focused($searchFocused)
+                    .onSubmit {
+                        if model.selectedResultID == nil { model.moveResult(1) } else { model.openSelectedResult() }
+                    }
                     .onChange(of: model.focusSearchTick) { searchFocused = true }
                 filters
                 if model.isSearching, let ms = model.searchMs {
@@ -62,24 +66,32 @@ struct SidebarView: View {
     }
 
     private var resultsList: some View {
-        List(model.results) { r in
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: icon(r.kind))
-                    .frame(width: 16)
-                    .foregroundStyle(.secondary)
-                if let c = r.color {
-                    Circle().fill(swatch(c)).frame(width: 9, height: 9).padding(.top, 4)
+        ScrollViewReader { proxy in
+            List(model.results, selection: $model.selectedResultID) { r in
+                HStack(alignment: .top, spacing: 8) {
+                    ResultThumbnail(model: model, result: r)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Image(systemName: icon(r.kind)).foregroundStyle(.secondary)
+                            if let c = r.color {
+                                Circle().fill(swatch(c)).frame(width: 9, height: 9)
+                            }
+                            Text(model.label(r.page)).foregroundStyle(.secondary)
+                        }
+                        .font(.caption)
+                        Text(model.styled(r.snippet)).lineLimit(4)
+                    }
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(model.label(r.page)).font(.caption).foregroundStyle(.secondary)
-                    Text(model.styled(r.snippet)).lineLimit(4)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .tag(r.id)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture { model.open(result: r) }
+            .listStyle(.sidebar)
+            .onChange(of: model.selectedResultID) { _, id in
+                guard let id else { return }
+                model.openSelectedResult()
+                proxy.scrollTo(id)
+            }
         }
-        .listStyle(.sidebar)
     }
 
     private func icon(_ kind: ResultKind) -> String {
@@ -123,5 +135,27 @@ struct SidebarView: View {
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
+    }
+}
+
+struct ResultThumbnail: View {
+    @ObservedObject var model: AppModel
+    let result: SearchResult
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
+            } else {
+                Rectangle().fill(.quaternary).aspectRatio(0.78, contentMode: .fit)
+            }
+        }
+        .frame(width: Thumbnailer.width)
+        .overlay(Rectangle().stroke(.separator, lineWidth: 0.5))
+        .task(id: "\(result.id)|\(model.query)") {
+            let terms = PageMatches.terms(model.query)
+            image = await model.thumbnailer?.thumbnail(page: result.page, marks: model.marks(for: result), terms: terms)
+        }
     }
 }

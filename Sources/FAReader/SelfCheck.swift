@@ -27,6 +27,26 @@ final class SelfCheck {
         return NSApp.mainMenu?.performKeyEquivalent(with: event) ?? false
     }
 
+    private func findField(in view: NSView?) -> NSTextField? {
+        guard let view else { return nil }
+        if let f = view as? NSTextField, f.placeholderString == SidebarView.searchPlaceholder { return f }
+        for sub in view.subviews { if let f = findField(in: sub) { return f } }
+        return nil
+    }
+
+    private func postArrow(down: Bool) {
+        guard let window = model.pdfView.window else { return }
+        let code: UInt16 = down ? 125 : 126
+        let chars = String(UnicodeScalar(down ? 0xF701 : 0xF700)!)
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [.numericPad, .function], timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: window.windowNumber, context: nil, characters: chars,
+                                        charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
+                NSApp.postEvent(e, atStart: false)
+            }
+        }
+    }
+
     private func select(_ text: String, page index: Int) -> PDFSelection? {
         guard let page = model.document?.page(at: index), let s = page.string,
               let range = s.range(of: text) else { return nil }
@@ -109,6 +129,44 @@ final class SelfCheck {
             let (outSection, _) = await search("graves", filter: SearchFilter(pages: micro.pages))
             check("section filter", inSection.contains { $0.highlightID == h.id } && !outSection.contains { $0.highlightID == h.id })
         }
+
+        model.query = "hyperthyroidism"
+        await pause(0.5)
+        if let field = findField(in: model.pdfView.window?.contentView) {
+            model.pdfView.window?.makeFirstResponder(field)
+            await pause()
+            let bookResults = model.results.filter { $0.kind == .book }.count
+            postArrow(down: true)
+            await pause(0.4)
+            let firstID = model.selectedResultID
+            let firstPage = model.currentPageIndex
+            postArrow(down: true)
+            await pause(0.4)
+            let secondID = model.selectedResultID
+            let secondResult = model.results.first { $0.id == secondID }
+            check("↓ in search field steps through results", firstID == model.results.first?.id && secondID == model.results.dropFirst().first?.id,
+                  "\(firstID ?? "nil") -> \(secondID ?? "nil"), \(model.results.count) results, \(bookResults) book")
+            check("↓ jumps the page", secondResult.map { model.currentPageIndex == $0.page } ?? false, "page \(firstPage) -> \(model.currentPageIndex)")
+            postArrow(down: false)
+            await pause(0.4)
+            check("↑ goes back", model.selectedResultID == firstID)
+            check("search field keeps focus", model.searchFieldFocused)
+            if let book = model.results.first(where: { $0.kind == .book }) {
+                model.selectedResultID = book.id
+                await pause(0.4)
+                check("book result highlights every match on the page", (model.pdfView.highlightedSelections?.count ?? 0) >= 1,
+                      model.pdfView.highlightedSelections?.count ?? 0)
+                let thumb = await model.thumbnailer?.thumbnail(page: book.page, marks: nil, terms: ["hyperthyroidism"])
+                check("result thumbnail renders", (thumb?.size.width ?? 0) > 0, thumb.map { "\($0.size)" } ?? "nil")
+            }
+            _ = press("g", keyCode: 5)
+            await pause(0.3)
+            check("⌘G moves to next result", model.selectedResultID != nil)
+        } else {
+            check("find search field", false)
+        }
+        model.query = ""
+        await pause(0.3)
 
         let scanned = PreviewImporter.scan(document)
         let preview = PreviewImporter.preview(annotations: scanned, alreadyImported: (try? store.importedHighlightIDs()) ?? [])

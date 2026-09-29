@@ -85,6 +85,10 @@ struct AppCommands: Commands {
         }
         CommandGroup(after: .textEditing) {
             Button("Search") { model.focusSearchTick += 1 }.keyboardShortcut("f")
+            Button("Next Result") { model.moveResult(1) }.keyboardShortcut("g")
+                .disabled(model.results.isEmpty)
+            Button("Previous Result") { model.moveResult(-1) }.keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(model.results.isEmpty)
         }
     }
 }
