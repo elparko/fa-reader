@@ -61,4 +61,34 @@ History lists every editing session with its device, time, and pages. "Undo this
 
 File > Import from Preview scans the highlights and notes already saved in the PDF by Preview and lists them. Nothing is imported until you press the Import button. Imported Preview annotations are hidden in the app so they do not show twice. The PDF itself is not changed.
 
-Annotations made in rapid runs are grouped as a burst: at least 15 annotations with no more than 3 seconds between one and the next. These usually come from accidental select-all or drag actions. Bursts are excluded by default; tick a burst to include it.
+Annotations made in rapid runs are grouped as a burst: at least 15 annotations with no more than 3 seconds between one and the next, or annotations on 5 or more different pages within 10 seconds. These usually come from accidental select-all or drag actions. Bursts are excluded by default; tick a burst to include it.
+
+The current First Aid PDF has 49 Preview highlights and 7 text notes, all made one at a time, so the scan finds no bursts in it.
+
+## Markdown export format
+
+One file per section (for example `24 Endocrine.md`). Re-running the export rewrites only files whose content changed and deletes files it created earlier for sections that no longer have highlights. Files without the `fa-reader-export: 1` line are never touched.
+
+```
+---
+fa-reader-export: 1
+section: "Endocrine"
+parent: "Section III: High-Yield Organ Systems"
+pdf-pages: 349-383
+highlights: 12
+---
+# Endocrine
+
+## p. 346 (PDF 367)
+- ==Papillary carcinoma: most prevalent, palpable lymph nodes== (pink) [open](fa-reader://open?page=367&highlight=<id>) <!-- fa:<id> -->
+  > note text
+```
+
+Each highlight line ends with `<!-- fa:<id> -->`, a stable ID another tool can key on.
+
+## Checking the app
+
+    "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --measure-open --exit
+    "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --self-check report.json
+
+`--self-check` runs without taking focus. It highlights text with Cmd+1, recolors with Cmd+3, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
