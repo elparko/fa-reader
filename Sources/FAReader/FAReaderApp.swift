@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task {
                 let token = Updater.token()
                 var latest: Release?
-                if let token { latest = try? await Updater.latest(token: token) }
+                latest = try? await Updater.latest(token: token)
                 print("current=\(Updater.currentBuild) token=\(token != nil) latest=\(latest.map { "\($0.build)" } ?? "none")")
                 exit(0)
             }

@@ -303,6 +303,12 @@ final class SelfCheck {
                   String(onDisk.suffix(300)))
             check("notes pane shows the updated file", model.marky.text == onDisk)
         }
+        model.notesMode = MarkyView.Mode.preview.rawValue
+        await pause(0.8)
+        if let view = model.pdfView.window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: report.deletingLastPathComponent().appendingPathComponent("notes.png"))
+        }
         let pageBeforeLink = model.currentPageIndex
         _ = model.marky.openURL?(URL(string: "fa-reader://open?page=100")!)
         await pause(0.3)

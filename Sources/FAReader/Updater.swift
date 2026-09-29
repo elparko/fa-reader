@@ -29,9 +29,9 @@ enum Updater {
         return nil
     }
 
-    static func latest(token: String) async throws -> Release? {
+    static func latest(token: String?) async throws -> Release? {
         var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         let (data, response) = try await URLSession.shared.data(for: req)
         guard (response as? HTTPURLResponse)?.statusCode == 200,
@@ -52,13 +52,7 @@ enum Updater {
     }
 
     static func check(interactive: Bool) async {
-        guard let token = token() else {
-            if interactive {
-                alert("Updates need the GitHub command-line tool",
-                      "Updates come from the private GitHub repository \(repo). In Terminal, run:\n\nbrew install gh\ngh auth login\n\nthen choose Check for Updates again.")
-            }
-            return
-        }
+        let token = token()
         let release: Release?
         do {
             release = try await latest(token: token)
@@ -87,9 +81,9 @@ enum Updater {
         }
     }
 
-    static func install(_ release: Release, token: String) async throws {
+    static func install(_ release: Release, token: String?) async throws {
         var req = URLRequest(url: release.assetURL)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         req.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
         let (zip, response) = try await URLSession.shared.download(for: req)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }

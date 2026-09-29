@@ -138,12 +138,9 @@ Each highlight line ends with `<!-- fa:<id> -->`, a stable ID another tool can k
 
 ## Updates
 
-Every push to `main` on GitHub (`elparko/fa-reader`, private) runs the tests, builds `FA Reader.zip`, and publishes it as a release named `build-<n>`, where `n` is the commit count. The app checks for a newer build once a day and from FA Reader > Check for Updates. It downloads the zip, replaces itself and restarts.
+Every push to `main` on GitHub (`elparko/fa-reader`, public) runs the tests, builds `FA Reader.zip`, and publishes it as a release named `build-<n>`, where `n` is the commit count. The app checks for a newer build once a day and from FA Reader > Check for Updates. It downloads the zip, replaces itself and restarts.
 
-Because the repository is private, the app gets a GitHub token from the GitHub command-line tool. On each Mac, run once:
-
-    brew install gh
-    gh auth login
+No GitHub account is needed to update. If the GitHub command-line tool (`gh`) is installed and logged in, the app uses its token, which avoids GitHub's limit of 60 anonymous requests per hour.
 
 ## Third-party code
 
