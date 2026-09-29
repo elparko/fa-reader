@@ -60,13 +60,13 @@ struct AppCommands: Commands {
             Button("Edit Note") { model.focusNote() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(model.selectedID == nil)
-            Button("Delete Highlight") { model.deleteSelected() }
+            Button("Delete Highlight") { model.deleteFromMenu() }
                 .keyboardShortcut(.delete, modifiers: .command)
                 .disabled(model.selectedID == nil || model.noteFocused)
         }
         CommandGroup(after: .toolbar) {
             Divider()
-            Button("Zoom In") { model.zoomIn() }.keyboardShortcut("+")
+            Button("Zoom In") { model.zoomIn() }.keyboardShortcut("=")
             Button("Zoom Out") { model.zoomOut() }.keyboardShortcut("-")
             Button("Actual Size") { model.actualSize() }.keyboardShortcut("0")
             Button("Zoom to Fit Width") { model.fitWidth() }.keyboardShortcut("9")

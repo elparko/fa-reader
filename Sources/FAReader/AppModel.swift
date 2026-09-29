@@ -429,7 +429,7 @@ final class AppModel: ObservableObject {
         for (index, rects) in map {
             guard let page = document.page(at: index) else { continue }
             var changed = false
-            for a in page.annotations where a.userName?.hasPrefix("fa") != true {
+            for a in page.annotations where a.userName?.hasPrefix("fa:") != true && a.userName != "fa-selection" {
                 guard let type = a.type, ["Highlight", "FreeText", "Text"].contains(where: { type.hasSuffix($0) }) else { continue }
                 if rects.contains(where: { close($0, a.bounds) }) {
                     page.removeAnnotation(a)
@@ -529,6 +529,14 @@ final class AppModel: ObservableObject {
         }
         guard !made.isEmpty else { return }
         if commit({ confirmed in try store.add(made, confirmed: confirmed) }) { pdfView.clearSelection() }
+    }
+
+    func deleteFromMenu() {
+        if NSApp.keyWindow?.firstResponder is NSText {
+            NSApp.sendAction(#selector(NSResponder.deleteToBeginningOfLine(_:)), to: nil, from: nil)
+        } else {
+            deleteSelected()
+        }
     }
 
     func deleteSelected() {
@@ -694,14 +702,11 @@ final class AppModel: ObservableObject {
         importPreview = nil
         showImport = true
         Task { @MainActor in
-            await Task.yield()
-            guard let store = self.store, let fresh = PDFDocument(url: url) else { return }
-            do {
-                self.importPreview = try PreviewImporter.preview(document: fresh, store: store)
-            } catch {
-                self.showImport = false
-                self.notify("Scan failed", info: "\(error)")
-            }
+            guard let fresh = PDFDocument(url: url) else { return }
+            let scanned = await Task.detached(priority: .userInitiated) { PreviewImporter.scan(fresh) }.value
+            guard showImport, let store else { return }
+            let already = (try? store.importedHighlightIDs()) ?? []
+            importPreview = PreviewImporter.preview(annotations: scanned, alreadyImported: already)
         }
     }
 
