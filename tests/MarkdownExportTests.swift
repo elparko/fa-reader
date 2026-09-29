@@ -35,6 +35,8 @@ private func read(_ dir: URL, _ name: String) throws -> String {
 @Test func linkFormat() {
     #expect(MarkdownExporter.link(page: 366) == "fa-reader://open?page=367")
     #expect(MarkdownExporter.link(page: 0, highlight: "abc") == "fa-reader://open?page=1&highlight=abc")
+    #expect(MarkdownExporter.link(page: 4, highlight: "abc", pdf: URL(fileURLWithPath: "/Books/Path oma & co.pdf"))
+            == "fa-reader://open?page=5&highlight=abc&pdf=/Books/Path%20oma%20%26%20co.pdf")
 }
 
 @Test func fileNameSanitizing() {
@@ -163,4 +165,13 @@ private func read(_ dir: URL, _ name: String) throws -> String {
     let name = MarkdownExporter.fileName(for: Section(id: 3, title: String(repeating: "a", count: 400), start: 0, end: 1))
     #expect(name.utf8.count <= 255)
     #expect(name.hasPrefix("03 a") && name.hasSuffix(".md"))
+}
+
+@Test func exportNamesTheBookWhenGivenThePDF() {
+    let section = Section(id: 1, title: "Renal", start: 0, end: 9)
+    let h = Highlight(id: "h1", page: 2, rects: [Rect(x: 0, y: 700, w: 10, h: 10)], text: "RTA", color: .green)
+    let text = MarkdownExporter.render(section: section, highlights: [h], printedPage: { _ in nil },
+                                       pdf: URL(fileURLWithPath: "/Books/Pathoma.pdf"))
+    #expect(text.contains("book: \"Pathoma\"\n"))
+    #expect(text.contains("&pdf=/Books/Pathoma.pdf)"))
 }

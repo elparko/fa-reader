@@ -1,13 +1,14 @@
 # fa-reader
 
-A macOS app for reading, highlighting, and annotating the First Aid for USMLE Step 1 PDF.
-It never writes to the PDF. Highlights and notes are stored in a folder next to the PDF.
+A macOS app for reading, highlighting, and annotating PDF textbooks. Built for First Aid for USMLE Step 1; works with any PDF.
+It never writes to the PDF. Highlights and notes are stored in a folder next to each PDF, so every book has its own highlights, history, search index and export.
 
 ## Build
 
     make app      # builds "build/FA Reader.app", signs it ad hoc, registers it with LaunchServices
     make run      # builds and opens the app
     make install  # builds and copies the app to /Applications
+    ./scripts/make-icon.sh  # redraws Resources/AppIcon.icns from scripts/make-icon.swift
     make test     # runs the tests
     make clean
 
@@ -20,7 +21,7 @@ Requires macOS 14 or later and the Swift 6 toolchain.
 3. `~/Library/Mobile Documents/com~apple~CloudDocs/School/MS1/Textbooks/first aid.pdf`, if it exists
 4. An Open dialog
 
-File > Open (Cmd+O) opens another PDF.
+File > Open (Cmd+O) opens another PDF. File > Open Recent lists the last 10 books. You can also drag a PDF onto the app icon, or choose Open With > FA Reader in Finder.
 
 ## Where data lives
 
@@ -41,6 +42,9 @@ The app reads other devices' logs every 5 seconds and when it becomes active.
 | Cmd+Shift+N | Edit the note of the selected highlight |
 | Cmd+Return | Save the note |
 | Cmd+F | Focus the search field |
+| Up / Down (in the search field) | Step through results; the page jumps to each one |
+| Return (in the search field) | Open the selected result |
+| Cmd+G, Cmd+Shift+G | Next, previous result |
 | Cmd+Y | History |
 | Cmd+Shift+E | Export Markdown |
 | Cmd+O | Open a PDF |
@@ -48,11 +52,13 @@ The app reads other devices' logs every 5 seconds and when it becomes active.
 
 Notes can contain `#tags`. Search filters by color, section, and tag.
 
+Each search result shows a thumbnail of its page with the match outlined in red. Opening a book-text result highlights every match on that page.
+
 "Go to page" accepts a printed book page (`346`) or a PDF page (`pdf 367`).
 
 ## URL scheme
 
-`fa-reader://open?page=<n>&highlight=<id>` opens the app at PDF page `n` (counting from 1) and selects the highlight. Markdown exports use these links.
+`fa-reader://open?page=<n>&highlight=<id>&pdf=<path>` opens the book at `path` (percent-encoded), goes to PDF page `n` (counting from 1) and selects the highlight. Without `pdf`, it uses the book that is open. Markdown exports use these links.
 
 ## History and undo
 
@@ -68,11 +74,12 @@ The current First Aid PDF has 49 Preview highlights and 7 text notes, all made o
 
 ## Markdown export format
 
-One file per section (for example `24 Endocrine.md`). Re-running the export rewrites only files whose content changed and deletes files it created earlier for sections that no longer have highlights. Files without the `fa-reader-export: 1` line are never touched.
+One file per section (for example `24 Endocrine.md`), in the book's `markdown/` folder. If you choose an export folder, each book gets its own subfolder there. Re-running the export rewrites only files whose content changed and deletes files it created earlier for sections that no longer have highlights. Files without the `fa-reader-export: 1` line are never touched.
 
 ```
 ---
 fa-reader-export: 1
+book: "first aid"
 section: "Endocrine"
 parent: "Section III: High-Yield Organ Systems"
 pdf-pages: 349-383
@@ -81,7 +88,7 @@ highlights: 12
 # Endocrine
 
 ## p. 346 (PDF 367)
-- ==Papillary carcinoma: most prevalent, palpable lymph nodes== (pink) [open](fa-reader://open?page=367&highlight=<id>) <!-- fa:<id> -->
+- ==Papillary carcinoma: most prevalent, palpable lymph nodes== (pink) [open](fa-reader://open?page=367&highlight=<id>&pdf=<path>) <!-- fa:<id> -->
   > note text
 ```
 

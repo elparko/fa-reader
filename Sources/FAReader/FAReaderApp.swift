@@ -21,6 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppModel.shared.start()
     }
 
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls { AppModel.shared.handle(url: url) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if AppModel.shared.selfCheck != nil || AppModel.shared.measureOpen {
             NSApp.setActivationPolicy(.accessory)
@@ -48,6 +52,13 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("Open…") { model.openPanel() }
                 .keyboardShortcut("o")
+            Menu("Open Recent") {
+                ForEach(model.recentBooks, id: \.self) { path in
+                    Button((path as NSString).lastPathComponent) { model.openRecent(path) }
+                }
+                Divider()
+                Button("Clear Menu") { model.clearRecent() }
+            }
         }
         CommandGroup(after: .importExport) {
             Divider()

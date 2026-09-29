@@ -96,6 +96,7 @@ final class AppModel: ObservableObject {
     @Published var sectionFilter: Int? { didSet { runSearch() } }
     @Published var tagFilter: String? { didSet { runSearch() } }
     @Published var results: [SearchResult] = []
+    @Published var recentBooks: [String] = UserDefaults.standard.stringArray(forKey: "recentPDFs") ?? []
     @Published var selectedResultID: String?
     private(set) var thumbnailer: Thumbnailer?
     private var keyMonitor: Any?
@@ -116,6 +117,7 @@ final class AppModel: ObservableObject {
     var selfCheck: SelfCheck?
 
     var measureOpen: Bool { arguments.contains("--measure-open") }
+    var isTestRun: Bool { measureOpen || selfCheck != nil }
     private var exitAfterMeasure: Bool { arguments.contains("--exit") }
 
     private init() {
@@ -203,7 +205,11 @@ final class AppModel: ObservableObject {
         printedCache = [:]
         results = []
         query = ""
-        UserDefaults.standard.set(url.path, forKey: "lastPDF")
+        if !isTestRun {
+            UserDefaults.standard.set(url.path, forKey: "lastPDF")
+            recentBooks = [url.path] + recentBooks.filter { $0 != url.path }.prefix(9)
+            UserDefaults.standard.set(recentBooks, forKey: "recentPDFs")
+        }
         runner = try? SearchRunner(databasePath: newStore.folder.databaseURL.path)
         thumbnailer = Thumbnailer(url: url)
         loadPreviewRects()
@@ -336,7 +342,7 @@ final class AppModel: ObservableObject {
     func updatePageLabel() {
         guard document != nil else { pageLabel = ""; return }
         let index = currentPageIndex
-        if let url = pdfURL { UserDefaults.standard.set(index, forKey: "lastPage:\(url.path)") }
+        if let url = pdfURL, !isTestRun { UserDefaults.standard.set(index, forKey: "lastPage:\(url.path)") }
         let pdf = "PDF \(index + 1) of \(pageCount)"
         pageLabel = printed(index).map { "p. \($0) · \(pdf)" } ?? pdf
     }
@@ -662,9 +668,17 @@ final class AppModel: ObservableObject {
     }
 
     func handle(url: URL) {
+        if url.isFileURL {
+            open(url)
+            return
+        }
         guard url.scheme == "fa-reader" else { return }
         guard store != nil else { pendingURL = url; return }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        if let path = items.first(where: { $0.name == "pdf" })?.value, path != pdfURL?.path,
+           FileManager.default.fileExists(atPath: path) {
+            open(URL(fileURLWithPath: path))
+        }
         let page = items.first { $0.name == "page" }?.value.flatMap(Int.init)
         let id = items.first { $0.name == "highlight" }?.value
         if let id, let h = try? store?.highlight(id: id) {
@@ -672,7 +686,12 @@ final class AppModel: ObservableObject {
         } else if let page {
             goTo(page: page - 1)
         }
-        if selfCheck == nil { NSApp.activate(ignoringOtherApps: true) }
+        if isTestRun {
+            print("handled_url book=\(pdfURL?.lastPathComponent ?? "") page=\(currentPageIndex)")
+            fflush(stdout)
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     // MARK: Search
@@ -785,7 +804,10 @@ final class AppModel: ObservableObject {
     // MARK: Export
 
     private var exportDirectory: URL? {
-        if let path = UserDefaults.standard.string(forKey: "exportFolder") { return URL(fileURLWithPath: path, isDirectory: true) }
+        if let path = UserDefaults.standard.string(forKey: "exportFolder"), let pdfURL {
+            return URL(fileURLWithPath: path, isDirectory: true)
+                .appendingPathComponent(pdfURL.deletingPathExtension().lastPathComponent, isDirectory: true)
+        }
         return store?.folder.markdownURL
     }
 
@@ -801,9 +823,9 @@ final class AppModel: ObservableObject {
     func exportMarkdown() {
         guard let store, let dir = exportDirectory else { return }
         do {
-            let result = try MarkdownExporter.export(store: store, sections: sections, to: dir) { page in
+            let result = try MarkdownExporter.export(store: store, sections: sections, to: dir, printedPage: { page in
                 try? BookIndex.printedPage(db: store.db, page: page)
-            }
+            }, pdf: pdfURL)
             let alert = NSAlert()
             alert.messageText = "Markdown exported"
             alert.informativeText = "\(result.written.count) written, \(result.unchanged.count) unchanged, \(result.removed.count) removed\n\(dir.path)"
@@ -816,5 +838,24 @@ final class AppModel: ObservableObject {
         } catch {
             notify("Export failed", info: "\(error)")
         }
+    }
+}
+
+extension AppModel {
+    var bookTitle: String { pdfURL?.deletingPathExtension().lastPathComponent ?? "FA Reader" }
+
+    func openRecent(_ path: String) {
+        guard FileManager.default.fileExists(atPath: path) else {
+            recentBooks.removeAll { $0 == path }
+            UserDefaults.standard.set(recentBooks, forKey: "recentPDFs")
+            notify("\((path as NSString).lastPathComponent) is no longer at \(path)")
+            return
+        }
+        open(URL(fileURLWithPath: path))
+    }
+
+    func clearRecent() {
+        recentBooks = pdfURL.map { [$0.path] } ?? []
+        UserDefaults.standard.set(recentBooks, forKey: "recentPDFs")
     }
 }

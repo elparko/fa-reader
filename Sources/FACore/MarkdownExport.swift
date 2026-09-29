@@ -9,9 +9,12 @@ public struct ExportResult: Equatable {
 public enum MarkdownExporter {
     public static let marker = "fa-reader-export: 1"
 
-    public static func link(page: Int, highlight: String? = nil) -> String {
+    public static func link(page: Int, highlight: String? = nil, pdf: URL? = nil) -> String {
         var s = "fa-reader://open?page=\(page + 1)"
         if let highlight { s += "&highlight=\(highlight)" }
+        if let pdf, let path = pdf.path.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) {
+            s += "&pdf=\(path)"
+        }
         return s
     }
 
@@ -24,8 +27,9 @@ public enum MarkdownExporter {
         return String(format: "%02d ", section.id) + title + ".md"
     }
 
-    public static func render(section: Section, highlights: [Highlight], printedPage: (Int) -> String?) -> String {
+    public static func render(section: Section, highlights: [Highlight], printedPage: (Int) -> String?, pdf: URL? = nil) -> String {
         var out = "---\n\(marker)\n"
+        if let pdf { out += "book: \(quoted(pdf.deletingPathExtension().lastPathComponent))\n" }
         out += "section: \(quoted(section.title))\n"
         if let parent = section.parent { out += "parent: \(quoted(parent))\n" }
         out += "pdf-pages: \(section.start + 1)-\(section.end + 1)\n"
@@ -40,14 +44,14 @@ public enum MarkdownExporter {
                 out += "\n## PDF p. \(page + 1)\n"
             }
             for h in byPage[page]!.sorted(by: readingOrder) {
-                out += line(h)
+                out += line(h, pdf: pdf)
             }
         }
         return out
     }
 
     public static func export(store: Store, sections: [Section], to directory: URL,
-                              printedPage: (Int) -> String? = { _ in nil }) throws -> ExportResult {
+                              printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil) throws -> ExportResult {
         var grouped: [Int: [Highlight]] = [:]
         for h in try store.highlights() {
             if let s = Sections.section(for: h.page, in: sections) { grouped[s.id, default: []].append(h) }
@@ -61,7 +65,7 @@ public enum MarkdownExporter {
         for section in sections where !(grouped[section.id] ?? []).isEmpty {
             let name = fileName(for: section)
             current.insert(name)
-            let data = Data(render(section: section, highlights: grouped[section.id]!, printedPage: printedPage).utf8)
+            let data = Data(render(section: section, highlights: grouped[section.id]!, printedPage: printedPage, pdf: pdf).utf8)
             let url = directory.appendingPathComponent(name)
             if let existing = try? Data(contentsOf: url), existing == data {
                 result.unchanged.append(name)
@@ -101,8 +105,8 @@ public enum MarkdownExporter {
             .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    private static func line(_ h: Highlight) -> String {
-        let open = "[open](\(link(page: h.page, highlight: h.id))) <!-- fa:\(h.id) -->"
+    private static func line(_ h: Highlight, pdf: URL?) -> String {
+        let open = "[open](\(link(page: h.page, highlight: h.id, pdf: pdf))) <!-- fa:\(h.id) -->"
         if h.highlightColor == .noteOnly {
             return "- Note: \(oneLine(h.note).replacingOccurrences(of: "==", with: "\\=\\=")) \(open)\n"
         }
@@ -123,4 +127,8 @@ public enum MarkdownExporter {
         }
         return key(a) < key(b)
     }
+}
+
+extension CharacterSet {
+    static let urlQueryValueAllowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+?#"))
 }

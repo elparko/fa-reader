@@ -221,5 +221,20 @@ final class SelfCheck {
             let png = report.deletingPathExtension().appendingPathExtension("png")
             try? rep.representation(using: .png, properties: [:])?.write(to: png)
         }
+
+        let original = model.pdfURL
+        let other = report.deletingLastPathComponent().appendingPathComponent("one.pdf")
+        if FileManager.default.fileExists(atPath: other.path), let original {
+            NSApp.delegate?.application?(NSApp, open: [other])
+            await pause(0.5)
+            check("opening another PDF switches book", model.pdfURL == other && model.pageCount == 1, model.bookTitle)
+            check("each book has its own data folder", model.store?.folder.root.lastPathComponent == "one.fa-reader")
+            let link = MarkdownExporter.link(page: 412, pdf: original)
+            NSApp.delegate?.application?(NSApp, open: [URL(string: link)!])
+            await pause(0.5)
+            check("link naming another book opens that book and page", model.pdfURL == original && model.currentPageIndex == 412,
+                  "\(model.bookTitle) \(model.currentPageIndex) via \(link)")
+            check("window title is the book name", model.bookTitle == original.deletingPathExtension().lastPathComponent)
+        }
     }
 }

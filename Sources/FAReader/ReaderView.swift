@@ -93,7 +93,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $model.showHistory) { HistoryView(model: model) }
         .sheet(isPresented: $model.showImport) { ImportView(model: model) }
-        .onOpenURL { model.handle(url: $0) }
+        .navigationTitle(model.bookTitle)
         .task { model.start() }
     }
 }

@@ -5,7 +5,8 @@ swift build -c release
 bin=$(swift build -c release --show-bin-path)
 app="build/FA Reader.app"
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 cp "$bin/FAReader" "$app/Contents/MacOS/FAReader"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 codesign --force --sign - "$app"

@@ -105,7 +105,7 @@ struct SidebarView: View {
     private var chapters: some View {
         VStack(spacing: 0) {
             HStack {
-                TextField("Go to page (346 or pdf 367)", text: $model.goToText)
+                TextField("Go to page (book page, or pdf 12)", text: $model.goToText)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { model.goToEntered() }
             }
