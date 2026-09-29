@@ -284,6 +284,32 @@ final class SelfCheck {
             check("Esc turns highlighter off", !model.highlighterOn)
         }
 
+        model.notesShown = true
+        model.goTo(page: graves)
+        await pause(0.4)
+        check("notes pane follows the section being read", model.notesTitle == "Endocrine" && model.marky.text.contains(MarkdownExporter.blockStart),
+              "\(model.notesTitle) \(model.marky.text.count) chars")
+        if let url = model.notesURL {
+            let mine = "\nThyroid storm: treat with the 4 Ps. #mine\n"
+            try? (model.marky.text + mine).write(to: url, atomically: true, encoding: .utf8)
+            model.refreshNotes(force: true)
+            if let sel = select("Other causes", page: graves) {
+                model.pdfView.setCurrentSelection(sel, animate: false)
+                model.applyColor(.yellow)
+            }
+            model.exportQuietly()
+            let onDisk = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            check("notes keep what you wrote when highlights change", onDisk.contains("treat with the 4 Ps. #mine") && onDisk.contains("Other causes"),
+                  String(onDisk.suffix(300)))
+            check("notes pane shows the updated file", model.marky.text == onDisk)
+        }
+        let pageBeforeLink = model.currentPageIndex
+        _ = model.marky.openURL?(URL(string: "fa-reader://open?page=100")!)
+        await pause(0.3)
+        check("page link clicked in notes moves the PDF", model.currentPageIndex == 99, "\(pageBeforeLink) -> \(model.currentPageIndex)")
+        model.goTo(page: graves)
+        await pause(0.3)
+
         let original = model.pdfURL
         let other = report.deletingLastPathComponent().appendingPathComponent("one.pdf")
         if FileManager.default.fileExists(atPath: other.path), let original {

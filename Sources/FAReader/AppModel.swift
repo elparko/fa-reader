@@ -97,6 +97,25 @@ final class AppModel: ObservableObject {
         }
     }
     @Published var showResultsPanel = false
+    @Published var notesShown = UserDefaults.standard.bool(forKey: "notesShown") {
+        didSet {
+            if !isTestRun { UserDefaults.standard.set(notesShown, forKey: "notesShown") }
+            if notesShown { refreshNotes(force: true) } else { saveNotes() }
+        }
+    }
+    @Published var notesMode = UserDefaults.standard.integer(forKey: "notesMode") {
+        didSet {
+            if !isTestRun { UserDefaults.standard.set(notesMode, forKey: "notesMode") }
+            marky.mode = MarkyView.Mode(rawValue: notesMode) ?? .preview
+        }
+    }
+    @Published var notesTitle = "Notes"
+    lazy var marky: MarkyView = makeMarky()
+    private(set) var notesURL: URL?
+    private var notesSectionID: Int?
+    private var notesDirty = false
+    private var notesSaveWork: DispatchWorkItem?
+    private var exportWork: DispatchWorkItem?
     private var popover: NSPopover?
     private var scrollObserver: Any?
     private var ignoreScrollUntil = Date.distantPast
@@ -245,6 +264,8 @@ final class AppModel: ObservableObject {
         syncedDevices = otherDevices
         lastSync = Date()
         startIndexing(url: url, pageCount: doc.pageCount)
+        notesSectionID = nil
+        refreshNotes(force: true)
         if let pending = pendingURL {
             pendingURL = nil
             handle(url: pending)
@@ -367,6 +388,7 @@ final class AppModel: ObservableObject {
     func updatePageLabel() {
         guard document != nil else { pageLabel = ""; return }
         let index = currentPageIndex
+        refreshNotes()
         if let url = pdfURL, !isTestRun { UserDefaults.standard.set(index, forKey: "lastPage:\(url.path)") }
         let pdf = "PDF \(index + 1) of \(pageCount)"
         pageLabel = printed(index).map { "p. \($0) · \(index + 1)/\(pageCount)" } ?? pdf
@@ -664,6 +686,7 @@ final class AppModel: ObservableObject {
         }
         reconcile()
         refreshHistory()
+        scheduleExport()
         return true
     }
 
@@ -864,6 +887,7 @@ final class AppModel: ObservableObject {
             loadPreviewRects()
             reconcile()
             refreshHistory()
+            scheduleExport()
         }
     }
 
@@ -909,7 +933,7 @@ final class AppModel: ObservableObject {
 
     // MARK: Export
 
-    private var exportDirectory: URL? {
+    var exportDirectory: URL? {
         if let path = UserDefaults.standard.string(forKey: "exportFolder"), let pdfURL {
             return URL(fileURLWithPath: path, isDirectory: true)
                 .appendingPathComponent(pdfURL.deletingPathExtension().lastPathComponent, isDirectory: true)
@@ -963,5 +987,97 @@ extension AppModel {
     func clearRecent() {
         recentBooks = pdfURL.map { [$0.path] } ?? []
         UserDefaults.standard.set(recentBooks, forKey: "recentPDFs")
+    }
+}
+
+extension AppModel {
+    func makeMarky() -> MarkyView {
+        let m = MarkyView()
+        m.mode = MarkyView.Mode(rawValue: notesMode) ?? .preview
+        m.onTextChange = { [weak self] in self?.notesChanged() }
+        m.openURL = { [weak self] url in
+            guard url.scheme == "fa-reader" else { return false }
+            self?.handle(url: url)
+            return true
+        }
+        m.openMarkdownLink = { [weak self] file, _ in self?.showNotesFile(file) }
+        return m
+    }
+
+    private func notesChanged() {
+        notesDirty = true
+        notesSaveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.saveNotes() } }
+        notesSaveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    func saveNotes() {
+        notesSaveWork?.cancel()
+        guard notesDirty, let url = notesURL else { return }
+        notesDirty = false
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(marky.text.utf8).write(to: url, options: .atomic)
+        } catch {
+            notify("Could not save notes", info: "\(error.localizedDescription)")
+        }
+    }
+
+    func refreshNotes(force: Bool = false) {
+        guard notesShown, let store, let dir = exportDirectory else { return }
+        let section = Sections.section(for: currentPageIndex, in: sections)
+        guard force || section?.id != notesSectionID else { return }
+        saveNotes()
+        notesSectionID = section?.id
+        guard let section else {
+            notesURL = nil
+            notesTitle = "Notes"
+            marky.text = ""
+            return
+        }
+        let url = dir.appendingPathComponent(MarkdownExporter.fileName(for: section))
+        let existing = try? String(contentsOf: url, encoding: .utf8)
+        var text = existing ?? ""
+        if existing == nil || existing.map(MarkdownExporter.hasMarker) == true {
+            let highlights = ((try? store.highlights()) ?? []).filter { section.pages.contains($0.page) }
+            text = MarkdownExporter.merge(existing: existing, section: section, highlights: highlights,
+                                          printedPage: { [weak self] in self?.printed($0) }, pdf: pdfURL)
+            if existing != nil, existing != text { try? Data(text.utf8).write(to: url, options: .atomic) }
+        }
+        notesURL = url
+        notesTitle = section.title
+        marky.baseURL = dir
+        if marky.text != text { marky.text = text }
+    }
+
+    func showNotesFile(_ file: URL) {
+        saveNotes()
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { NSSound.beep(); return }
+        notesURL = file
+        notesSectionID = -1
+        notesTitle = file.deletingPathExtension().lastPathComponent
+        marky.baseURL = file.deletingLastPathComponent()
+        marky.text = text
+    }
+
+    func revealNotes() {
+        guard let target = notesURL ?? exportDirectory else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([target])
+    }
+
+    func scheduleExport() {
+        exportWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.exportQuietly() } }
+        exportWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    func exportQuietly() {
+        exportWork?.cancel()
+        guard let store, let dir = exportDirectory else { return }
+        saveNotes()
+        _ = try? MarkdownExporter.export(store: store, sections: sections, to: dir, printedPage: { [weak self] in self?.printed($0) }, pdf: pdfURL)
+        refreshNotes(force: true)
     }
 }

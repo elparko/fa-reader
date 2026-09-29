@@ -53,6 +53,12 @@ The app reads other devices' logs every 5 seconds and when it becomes active.
 - Clicking a highlight opens a small popup next to it with its colors, note and Delete. Done or Esc closes it.
 - The window works down to about 480 points wide, so half a screen is fine.
 
+## Notes pane
+
+The Notes button in the toolbar (Cmd+Option+N) opens the markdown notes for the section you are reading, next to the PDF. It follows you as you move between sections. It uses the Marky viewer (md4c parser, native TextKit rendering) with three modes: preview, edit and preview side by side, and edit.
+
+Each section file has an automatic highlights block between `<!-- fa-reader:highlights:start -->` and `<!-- fa-reader:highlights:end -->`. The app rewrites that block whenever highlights change. Everything outside it (the `## Notes` part, or anything you add above the block) is yours and is never overwritten. Edits save as you type. Page links in the notes jump the PDF to that highlight.
+
 ## Highlighting
 
 The toolbar, next to the zoom buttons, has a highlighter button and four color dots.
@@ -103,7 +109,7 @@ The current First Aid PDF has 49 Preview highlights and 7 text notes, all made o
 
 ## Markdown export format
 
-One file per section (for example `24 Endocrine.md`), in the book's `markdown/` folder. If you choose an export folder, each book gets its own subfolder there. Re-running the export rewrites only files whose content changed and deletes files it created earlier for sections that no longer have highlights. Files without the `fa-reader-export: 1` line are never touched.
+One file per section (for example `24 Endocrine.md`), in the book's `markdown/` folder. The files update automatically about a second after any highlight change; File > Export Markdown does the same on demand. If you choose an export folder, each book gets its own subfolder there. Re-running the export rewrites only files whose content changed. It deletes a file it created only when that section has no highlights left and you have written nothing in the file. Files without the `fa-reader-export: 1` line are never touched.
 
 ```
 ---
@@ -129,3 +135,17 @@ Each highlight line ends with `<!-- fa:<id> -->`, a stable ID another tool can k
     "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --self-check report.json
 
 `--self-check` runs without taking focus. It highlights text with Cmd+1, recolors with Cmd+3, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
+
+## Updates
+
+Every push to `main` on GitHub (`elparko/fa-reader`, private) runs the tests, builds `FA Reader.zip`, and publishes it as a release named `build-<n>`, where `n` is the commit count. The app checks for a newer build once a day and from FA Reader > Check for Updates. It downloads the zip, replaces itself and restarts.
+
+Because the repository is private, the app gets a GitHub token from the GitHub command-line tool. On each Mac, run once:
+
+    brew install gh
+    gh auth login
+
+## Third-party code
+
+- md4c 0.5.2 (MIT), in `Sources/md4c`.
+- Marky Markdown view, in `Sources/FAReader/Marky`.

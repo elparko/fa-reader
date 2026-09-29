@@ -1,0 +1,5 @@
+module md4c {
+    header "md4c.h"
+    header "entity.h"
+    export *
+}

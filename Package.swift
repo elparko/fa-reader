@@ -10,7 +10,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "FACore", linkerSettings: [.linkedLibrary("sqlite3")]),
-        .executableTarget(name: "FAReader", dependencies: ["FACore"]),
+        .target(name: "md4c", exclude: ["LICENSE.md"]),
+        .executableTarget(name: "FAReader", dependencies: ["FACore", "md4c"]),
         .testTarget(name: "FACoreTests", dependencies: ["FACore"], path: "tests"),
     ],
     swiftLanguageModes: [.v5]

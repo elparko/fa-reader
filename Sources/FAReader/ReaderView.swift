@@ -131,6 +131,7 @@ struct ContentView: View {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 110, ideal: model.pagesOnly ? 150 : 290, max: 420)
         } detail: {
+            HSplitView {
             ReaderView(model: model)
                 .overlay(alignment: .topTrailing) {
                     if !sidebarShown, model.isSearching, model.showResultsPanel {
@@ -150,6 +151,12 @@ struct ContentView: View {
                         }
                     }
                 }
+                .frame(minWidth: 300)
+                if model.notesShown {
+                    NotesPane(model: model)
+                        .frame(minWidth: 260, idealWidth: 380)
+                }
+            }
                 .toolbar {
                     ToolbarItem(placement: .principal) {
                         Text(model.pageLabel.isEmpty ? " " : model.pageLabel).monospacedDigit()
@@ -175,6 +182,9 @@ struct ContentView: View {
                             Button { model.zoomIn() } label: { Image(systemName: "plus.magnifyingglass") }
                                 .help("Zoom in (Cmd+=)")
                         }
+                        Toggle(isOn: $model.notesShown) { Label("Notes", systemImage: "note.text") }
+                            .toggleStyle(.button)
+                            .help("Show the markdown notes for this section (Cmd+Option+N)")
                         Menu {
                             Button("Actual Size") { model.actualSize() }
                             Button("Fit Width") { model.fitWidth() }

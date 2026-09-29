@@ -1,0 +1,34 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Toolchain
+        run: swift --version
+      - name: Test
+        run: swift test
+      - name: Build app
+        run: make dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(git rev-list --count HEAD)
+          git log -1 --pretty=%B > notes.txt
+          gh release create "build-$n" "build/FA Reader.zip" --title "Build $n" --notes-file notes.txt --target "$GITHUB_SHA"

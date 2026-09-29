@@ -27,27 +27,66 @@ public enum MarkdownExporter {
         return String(format: "%02d ", section.id) + title + ".md"
     }
 
+    public static let blockStart = "<!-- fa-reader:highlights:start -->"
+    public static let blockEnd = "<!-- fa-reader:highlights:end -->"
+    public static let notesHeading = "## Notes"
+
     public static func render(section: Section, highlights: [Highlight], printedPage: (Int) -> String?, pdf: URL? = nil) -> String {
+        merge(existing: nil, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf)
+    }
+
+    public static func merge(existing: String?, section: Section, highlights: [Highlight],
+                             printedPage: (Int) -> String?, pdf: URL? = nil) -> String {
         var out = "---\n\(marker)\n"
         if let pdf { out += "book: \(quoted(pdf.deletingPathExtension().lastPathComponent))\n" }
         out += "section: \(quoted(section.title))\n"
         if let parent = section.parent { out += "parent: \(quoted(parent))\n" }
         out += "pdf-pages: \(section.start + 1)-\(section.end + 1)\n"
         out += "highlights: \(highlights.count)\n---\n"
-        out += "# \(section.title)\n"
 
+        var block = blockStart + "\n"
         let byPage = Dictionary(grouping: highlights, by: \.page)
         for page in byPage.keys.sorted() {
             if let printed = printedPage(page) {
-                out += "\n## p. \(printed) (PDF \(page + 1))\n"
+                block += "\n## p. \(printed) (PDF \(page + 1))\n"
             } else {
-                out += "\n## PDF p. \(page + 1)\n"
+                block += "\n## PDF p. \(page + 1)\n"
             }
             for h in byPage[page]!.sorted(by: readingOrder) {
-                out += line(h, pdf: pdf)
+                block += line(h, pdf: pdf)
             }
         }
-        return out
+        if !highlights.isEmpty { block += "\n" }
+        block += blockEnd + "\n"
+
+        if let existing, let parts = split(existing) {
+            return out + parts.before + block + parts.after
+        }
+        return out + "# \(section.title)\n\n" + block + "\n" + notesHeading + "\n\n"
+    }
+
+    public static func hasUserContent(_ text: String) -> Bool {
+        guard let parts = split(text) else { return !body(text).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let rest = (parts.before + parts.after).split(separator: "\n").filter { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            return !t.isEmpty && !t.hasPrefix("# ") && t != notesHeading
+        }
+        return !rest.isEmpty
+    }
+
+    private static func body(_ text: String) -> Substring {
+        guard text.hasPrefix("---\n"), let close = text.range(of: "\n---\n", range: text.index(text.startIndex, offsetBy: 3)..<text.endIndex) else {
+            return Substring(text)
+        }
+        return text[close.upperBound...]
+    }
+
+    private static func split(_ text: String) -> (before: String, after: String)? {
+        let b = body(text)
+        guard let start = b.range(of: blockStart), let end = b.range(of: blockEnd, range: start.upperBound..<b.endIndex) else { return nil }
+        var afterStart = end.upperBound
+        if afterStart < b.endIndex, b[afterStart] == "\n" { afterStart = b.index(after: afterStart) }
+        return (String(b[..<start.lowerBound]), String(b[afterStart...]))
     }
 
     public static func export(store: Store, sections: [Section], to directory: URL,
@@ -62,15 +101,19 @@ public enum MarkdownExporter {
 
         var result = ExportResult(written: [], unchanged: [], removed: [])
         var current = Set<String>()
-        for section in sections where !(grouped[section.id] ?? []).isEmpty {
+        for section in sections {
             let name = fileName(for: section)
-            current.insert(name)
-            let data = Data(render(section: section, highlights: grouped[section.id]!, printedPage: printedPage, pdf: pdf).utf8)
             let url = directory.appendingPathComponent(name)
-            if let existing = try? Data(contentsOf: url), existing == data {
+            let existing = try? String(contentsOf: url, encoding: .utf8)
+            if let existing, !hasMarker(existing) { continue }
+            let highlights = grouped[section.id] ?? []
+            guard !highlights.isEmpty || existing.map(hasUserContent) == true else { continue }
+            current.insert(name)
+            let text = merge(existing: existing, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf)
+            if existing == text {
                 result.unchanged.append(name)
             } else {
-                try data.write(to: url, options: .atomic)
+                try Data(text.utf8).write(to: url, options: .atomic)
                 result.written.append(name)
             }
         }
@@ -78,14 +121,14 @@ public enum MarkdownExporter {
         let files = try fm.contentsOfDirectory(atPath: directory.path).filter { $0.hasSuffix(".md") }.sorted()
         for name in files where !current.contains(name) {
             let url = directory.appendingPathComponent(name)
-            guard let text = try? String(contentsOf: url, encoding: .utf8), hasMarker(text) else { continue }
+            guard let text = try? String(contentsOf: url, encoding: .utf8), hasMarker(text), !hasUserContent(text) else { continue }
             try fm.removeItem(at: url)
             result.removed.append(name)
         }
         return result
     }
 
-    private static func hasMarker(_ text: String) -> Bool {
+    public static func hasMarker(_ text: String) -> Bool {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
         guard lines.first == "---" else { return false }
         for l in lines.dropFirst() {

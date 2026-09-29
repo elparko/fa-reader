@@ -26,6 +26,8 @@
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>FAUpdateRepo</key>
+    <string>elparko/fa-reader</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleDocumentTypes</key>

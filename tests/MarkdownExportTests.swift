@@ -64,10 +64,17 @@ private func read(_ dir: URL, _ name: String) throws -> String {
         ---
         # Biochemistry
 
+        <!-- fa-reader:highlights:start -->
+
         ## PDF p. 3
         - ==Papillary carcinoma: most prevalent== (pink) [open](fa-reader://open?page=3&highlight=a1) <!-- fa:a1 -->
           > line 1
           > line 2
+
+        <!-- fa-reader:highlights:end -->
+
+        ## Notes
+
 
         """)
 
@@ -174,4 +181,50 @@ private func read(_ dir: URL, _ name: String) throws -> String {
                                        pdf: URL(fileURLWithPath: "/Books/Pathoma.pdf"))
     #expect(text.contains("book: \"Pathoma\"\n"))
     #expect(text.contains("&pdf=/Books/Pathoma.pdf)"))
+}
+
+@Test func reExportKeepsWhatTheUserWrote() throws {
+    let store = try makeStore()
+    let dir = outputDir()
+    _ = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    let url = dir.appendingPathComponent("00 Biochemistry.md")
+    var text = try String(contentsOf: url, encoding: .utf8)
+    text = text.replacingOccurrences(of: "# Biochemistry\n", with: "# Biochemistry\n\nIntro I wrote.\n")
+    text += "My summary of [[Endocrine]] with - [ ] a task\n"
+    try text.write(to: url, atomically: true, encoding: .utf8)
+
+    let h = Highlight(id: "zz", page: 5, rects: [Rect(x: 0, y: 500, w: 10, h: 10)], text: "Pyruvate kinase", color: .blue)
+    try store.add([h])
+    let result = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    #expect(result.written == ["00 Biochemistry.md"])
+    let after = try String(contentsOf: url, encoding: .utf8)
+    #expect(after.contains("Intro I wrote.\n"))
+    #expect(after.hasSuffix("My summary of [[Endocrine]] with - [ ] a task\n"))
+    #expect(after.contains("Pyruvate kinase"))
+    #expect(after.components(separatedBy: MarkdownExporter.blockStart).count == 2)
+    #expect(after.contains("highlights: 2\n"))
+
+    let again = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    #expect(again.written.isEmpty)
+}
+
+@Test func sectionFileWithUserNotesSurvivesLosingItsHighlights() throws {
+    let store = try makeStore()
+    let dir = outputDir()
+    _ = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    let bio = dir.appendingPathComponent("00 Biochemistry.md")
+    try (try String(contentsOf: bio, encoding: .utf8) + "Keep this.\n").write(to: bio, atomically: true, encoding: .utf8)
+    try store.delete(try store.highlights().map(\.id))
+    let result = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    #expect(!result.removed.contains("00 Biochemistry.md"))
+    let text = try String(contentsOf: bio, encoding: .utf8)
+    #expect(text.contains("Keep this.\n") && text.contains("highlights: 0\n") && !text.contains("Papillary"))
+    #expect(result.removed.contains("02 Hematology.md"))
+}
+
+@Test func userContentDetection() {
+    let section = Section(id: 1, title: "Renal", start: 0, end: 9)
+    let fresh = MarkdownExporter.render(section: section, highlights: [], printedPage: { _ in nil })
+    #expect(!MarkdownExporter.hasUserContent(fresh))
+    #expect(MarkdownExporter.hasUserContent(fresh + "RTA type 1 = distal\n"))
 }

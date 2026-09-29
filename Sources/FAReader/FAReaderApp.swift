@@ -38,6 +38,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
+            Updater.checkDaily()
+        }
+        if CommandLine.arguments.contains("--print-update") {
+            Task {
+                let token = Updater.token()
+                var latest: Release?
+                if let token { latest = try? await Updater.latest(token: token) }
+                print("current=\(Updater.currentBuild) token=\(token != nil) latest=\(latest.map { "\($0.build)" } ?? "none")")
+                exit(0)
+            }
         }
     }
 
@@ -52,6 +62,9 @@ struct AppCommands: Commands {
     @ObservedObject var model: AppModel
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { Task { await Updater.check(interactive: true) } }
+        }
         CommandGroup(replacing: .newItem) {
             Button("Open…") { model.openPanel() }
                 .keyboardShortcut("o")
@@ -92,6 +105,8 @@ struct AppCommands: Commands {
         }
         CommandGroup(after: .toolbar) {
             Divider()
+            Button(model.notesShown ? "Hide Notes" : "Show Notes") { model.notesShown.toggle() }
+                .keyboardShortcut("n", modifiers: [.command, .option])
             Button("Zoom In") { model.zoomIn() }.keyboardShortcut("=")
             Button("Zoom Out") { model.zoomOut() }.keyboardShortcut("-")
             Button("Actual Size") { model.actualSize() }.keyboardShortcut("0")
