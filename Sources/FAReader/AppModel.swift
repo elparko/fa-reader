@@ -189,6 +189,9 @@ final class AppModel: ObservableObject {
         pdfURL = url
         document = doc
         pdfView.document = doc
+        if let last = UserDefaults.standard.object(forKey: "lastPage:\(url.path)") as? Int, let page = doc.page(at: last) {
+            pdfView.go(to: page)
+        }
         printedCache = [:]
         results = []
         query = ""
@@ -323,6 +326,7 @@ final class AppModel: ObservableObject {
     func updatePageLabel() {
         guard document != nil else { pageLabel = ""; return }
         let index = currentPageIndex
+        if let url = pdfURL { UserDefaults.standard.set(index, forKey: "lastPage:\(url.path)") }
         let pdf = "PDF \(index + 1) of \(pageCount)"
         pageLabel = printed(index).map { "p. \($0) · \(pdf)" } ?? pdf
     }
