@@ -96,6 +96,12 @@ final class AppModel: ObservableObject {
     @Published var sectionFilter: Int? { didSet { runSearch() } }
     @Published var tagFilter: String? { didSet { runSearch() } }
     @Published var results: [SearchResult] = []
+    @Published var highlighterOn = UserDefaults.standard.bool(forKey: "highlighterOn") {
+        didSet { if !isTestRun { UserDefaults.standard.set(highlighterOn, forKey: "highlighterOn") } }
+    }
+    @Published var penColor = HighlightColor(rawValue: UserDefaults.standard.integer(forKey: "penColor")).flatMap { $0 == .noteOnly ? nil : $0 } ?? .yellow {
+        didSet { if !isTestRun { UserDefaults.standard.set(penColor.rawValue, forKey: "penColor") } }
+    }
     @Published var recentBooks: [String] = UserDefaults.standard.stringArray(forKey: "recentPDFs") ?? []
     @Published var selectedResultID: String?
     private(set) var thumbnailer: Thumbnailer?
@@ -124,6 +130,10 @@ final class AppModel: ObservableObject {
         pdfView.configure()
         installKeyMonitor()
         pdfView.onHit = { [weak self] id in self?.select(id) }
+        pdfView.onSelectionEnded = { [weak self] in self?.selectionEnded() }
+        pdfView.onColor = { [weak self] c in self?.applyColor(c) }
+        pdfView.onEditNote = { [weak self] in self?.focusNote() }
+        pdfView.onDelete = { [weak self] in self?.deleteSelected() }
         if let i = arguments.firstIndex(of: "--self-check"), i + 1 < arguments.count {
             selfCheck = SelfCheck(report: URL(fileURLWithPath: arguments[i + 1]))
         }
@@ -522,6 +532,24 @@ final class AppModel: ObservableObject {
         noteFocusTick += 1
     }
 
+    var hasTextSelection: Bool {
+        !(pdfView.currentSelection?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func toolbarColor(_ color: HighlightColor) {
+        penColor = color
+        if hasTextSelection || selectedID != nil {
+            applyColor(color)
+        } else {
+            highlighterOn = true
+        }
+    }
+
+    func selectionEnded() {
+        guard highlighterOn, hasTextSelection else { return }
+        applyColor(penColor)
+    }
+
     func applyColor(_ color: HighlightColor) {
         if let selection = pdfView.currentSelection, !(selection.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             highlightSelection(selection, color: color)
@@ -655,7 +683,12 @@ final class AppModel: ObservableObject {
             let window = event.window
             let handled = MainActor.assumeIsolated { () -> Bool in
                 let model = AppModel.shared
-                guard plain, window != nil, window === model.pdfView.window, model.isSearching, !model.results.isEmpty, model.searchFieldFocused else { return false }
+                if code == 53, plain, window === model.pdfView.window, model.highlighterOn, !model.searchFieldFocused {
+                    model.highlighterOn = false
+                    return true
+                }
+                guard plain, window != nil, window === model.pdfView.window, model.isSearching,
+                      !model.results.isEmpty, model.searchFieldFocused else { return false }
                 switch code {
                 case 125: model.moveResult(1)
                 case 126: model.moveResult(-1)

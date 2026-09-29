@@ -222,6 +222,52 @@ final class SelfCheck {
             try? rep.representation(using: .png, properties: [:])?.write(to: png)
         }
 
+        model.select(nil)
+        model.pdfView.clearSelection()
+        model.highlighterOn = false
+        model.toolbarColor(.green)
+        check("toolbar color with nothing selected arms highlighter", model.highlighterOn && model.penColor == .green)
+        model.goTo(page: graves)
+        if let sel = select("Toxic multinodular", page: graves) {
+            model.pdfView.setCurrentSelection(sel, animate: false)
+            model.selectionEnded()
+            let made = (try? store.highlights(page: graves))?.first { $0.text.contains("Toxic multinodular") }
+            check("highlighter mode highlights on mouse release", made?.highlightColor == .green, made?.text ?? "none")
+            if let made, let r = made.rects.first, let page = document.page(at: graves) {
+                model.goTo(page: graves)
+                await pause(0.3)
+                let viewPoint = model.pdfView.convert(CGPoint(x: r.x + r.w / 2, y: r.y + r.h / 2), from: page)
+                let windowPoint = model.pdfView.convert(viewPoint, to: nil)
+                if let event = NSEvent.mouseEvent(with: .rightMouseDown, location: windowPoint, modifierFlags: [], timestamp: 0,
+                                                  windowNumber: model.pdfView.window?.windowNumber ?? 0, context: nil,
+                                                  eventNumber: 0, clickCount: 1, pressure: 1) {
+                    model.pdfView.clearSelection()
+                    let titles = model.pdfView.menu(for: event)?.items.map(\.title) ?? []
+                    check("right-click on a highlight offers colors, note, delete",
+                          titles.contains("Make Pink") && titles.contains("Edit Note") && titles.contains("Delete Highlight"), titles.prefix(8))
+                    check("right-click selects that highlight", model.selectedID == made.id)
+                }
+            }
+            if let sel2 = select("Thyroid storm", page: graves) {
+                model.highlighterOn = false
+                model.pdfView.setCurrentSelection(sel2, animate: false)
+                model.selectionEnded()
+                check("highlighter off leaves selection alone", !((try? store.highlights(page: graves)) ?? []).contains { $0.text.contains("Thyroid storm") })
+                model.toolbarColor(.blue)
+                let blue = (try? store.highlights(page: graves))?.first { $0.text.contains("Thyroid storm") }
+                check("toolbar color with text selected highlights it", blue?.highlightColor == .blue)
+            }
+            model.highlighterOn = true
+            model.pdfView.window?.makeFirstResponder(model.pdfView)
+            if let window = model.pdfView.window, let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                                               windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+                                                                               charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) {
+                NSApp.postEvent(esc, atStart: false)
+                await pause(0.3)
+            }
+            check("Esc turns highlighter off", !model.highlighterOn)
+        }
+
         let original = model.pdfURL
         let other = report.deletingLastPathComponent().appendingPathComponent("one.pdf")
         if FileManager.default.fileExists(atPath: other.path), let original {

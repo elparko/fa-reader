@@ -33,6 +33,15 @@ For `first aid.pdf`, the folder is `first aid.fa-reader/` next to the PDF:
 
 The app reads other devices' logs every 5 seconds and when it becomes active.
 
+## Highlighting
+
+The toolbar, next to the zoom buttons, has a highlighter button and four color dots.
+
+- Select text, then click a color: the text is highlighted in that color.
+- Click a highlight, then click a color: the highlight changes color.
+- Click a color with nothing selected: highlighter mode turns on with that color. Every selection you make is highlighted when you release the mouse. Click the highlighter button or press Esc to turn it off.
+- Right-click selected text to highlight it, or right-click a highlight to change its color, edit its note or delete it.
+
 ## Keyboard shortcuts
 
 | Keys | Action |
