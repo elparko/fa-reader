@@ -20,6 +20,7 @@ public enum MarkdownExporter {
         var title = String(String.UnicodeScalarView(section.title.unicodeScalars.map { bad.contains($0) ? " " : $0 }))
         title = title.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         while title.hasPrefix(".") { title.removeFirst() }
+        title = String(title.prefix(120))
         return String(format: "%02d ", section.id) + title + ".md"
     }
 
@@ -108,7 +109,7 @@ public enum MarkdownExporter {
         let text = oneLine(h.text).replacingOccurrences(of: "==", with: "\\=\\=")
         var s = "- ==\(text)== (\(h.highlightColor.name)) \(open)\n"
         if !h.note.isEmpty {
-            for l in h.note.split(separator: "\n", omittingEmptySubsequences: false) {
+            for l in h.note.split(omittingEmptySubsequences: false, whereSeparator: { $0.isNewline }) {
                 s += l.isEmpty ? "  >\n" : "  > \(l)\n"
             }
         }

@@ -151,3 +151,16 @@ private func read(_ dir: URL, _ name: String) throws -> String {
     #expect(md.contains("==a \\=\\= b=="))
     #expect(md.range(of: "## PDF p. 4")!.lowerBound < md.range(of: "## PDF p. 6")!.lowerBound)
 }
+
+@Test func windowsLineEndingsInNoteStayInsideBlock() {
+    let hs = [hl("n", page: 1, note: "one\r\ntwo\r\n\r\nthree")]
+    let md = MarkdownExporter.render(section: testSections[0], highlights: hs) { _ in nil }
+    #expect(!md.contains("\r"))
+    #expect(md.contains("  > one\n  > two\n  >\n  > three\n"))
+}
+
+@Test func longTitleFileNameIsShortened() {
+    let name = MarkdownExporter.fileName(for: Section(id: 3, title: String(repeating: "a", count: 400), start: 0, end: 1))
+    #expect(name.utf8.count <= 255)
+    #expect(name.hasPrefix("03 a") && name.hasSuffix(".md"))
+}
