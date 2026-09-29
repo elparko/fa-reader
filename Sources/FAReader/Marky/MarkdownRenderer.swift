@@ -1,4 +1,5 @@
 import AppKit
+import FACore
 import md4c
 
 extension NSAttributedString.Key {
@@ -462,6 +463,8 @@ final class MarkdownRenderer {
         last = (range, style)
         lastAdjustable = paraBlock == nil
         paraStart = nil
+        markStart = nil
+        lastMark = nil
         paraBlock = nil
         paraIndentBlock = nil
         paraImplicit = false
@@ -620,8 +623,48 @@ final class MarkdownRenderer {
         case MD_TEXT_ENTITY: append(Self.decodeEntity(p, n))
         case MD_TEXT_HTML:
             if htmlBlock != nil { htmlBlock! += Self.str(p, n) } else { inlineHTML(Self.str(p, n)) }
+        case MD_TEXT_NORMAL where paraKind != .code && codeSpan + hCode == 0 && imageDepth == 0 && htmlBlock == nil:
+            appendMarked(Self.str(p, n))
         default: append(Self.str(p, n))
         }
+    }
+
+    private var markStart: Int?
+    private var lastMark: NSRange?
+
+    /// `==text==` highlights; a following " (yellow|green|pink|blue)" label sets the color and is hidden.
+    private func appendMarked(_ s: String) {
+        guard s.contains("==") || lastMark != nil else { append(s); return }
+        for (i, piece) in s.components(separatedBy: "==").enumerated() {
+            if i > 0 {
+                if let start = markStart {
+                    let range = NSRange(location: start, length: out.length - start)
+                    out.addAttribute(.backgroundColor, value: Self.markColor(.yellow), range: range)
+                    lastMark = range
+                    markStart = nil
+                } else {
+                    ensureParagraph()
+                    markStart = out.length
+                }
+            }
+            var seg = piece
+            if let mark = lastMark, i > 0 || !s.hasPrefix("==") {
+                if let m = seg.range(of: #"^ \((yellow|green|pink|blue)\)"#, options: .regularExpression) {
+                    let name = seg[m].dropFirst(2).dropLast()
+                    if let c = HighlightColor.highlightColors.first(where: { $0.name == name }) {
+                        out.addAttribute(.backgroundColor, value: Self.markColor(c), range: mark)
+                    }
+                    seg.removeSubrange(m)
+                }
+                if markStart == nil { lastMark = nil }
+            }
+            if !seg.isEmpty { append(seg) }
+        }
+    }
+
+    private static func markColor(_ c: HighlightColor) -> NSColor {
+        let (r, g, b) = c.rgb
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: 0.45)
     }
 
     private func append(_ s: String) {
