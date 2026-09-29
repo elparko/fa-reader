@@ -7,6 +7,7 @@ It never writes to the PDF. Highlights and notes are stored in a folder next to 
 
     make app      # builds "build/FA Reader.app", signs it ad hoc, registers it with LaunchServices
     make run      # builds and opens the app
+    make install  # builds and copies the app to /Applications
     make test     # runs the tests
     make clean
 
