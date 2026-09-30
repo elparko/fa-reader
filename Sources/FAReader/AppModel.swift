@@ -132,6 +132,9 @@ final class AppModel: ObservableObject {
     @Published var penColor = HighlightColor(rawValue: UserDefaults.standard.integer(forKey: "penColor")).flatMap { $0 == .noteOnly ? nil : $0 } ?? .yellow {
         didSet { if !isTestRun { UserDefaults.standard.set(penColor.rawValue, forKey: "penColor") } }
     }
+    /// Center of the color popup over the selected text, in the PDF view with the origin at the top left. Nil when hidden.
+    @Published private(set) var colorPopupAt: CGPoint?
+    static let colorPopupSize = CGSize(width: 136, height: 36)
     @Published var recentBooks: [String] = UserDefaults.standard.stringArray(forKey: "recentPDFs") ?? []
     @Published var selectedResultID: String?
     private(set) var thumbnailer: Thumbnailer?
@@ -161,6 +164,7 @@ final class AppModel: ObservableObject {
         installKeyMonitor()
         pdfView.onHit = { [weak self] id in
             self?.showResultsPanel = false
+            self?.hideColorPopup()
             self?.select(id)
         }
         pdfView.onSelectionEnded = { [weak self] in self?.selectionEnded() }
@@ -178,7 +182,13 @@ final class AppModel: ObservableObject {
             MainActor.assumeIsolated { self?.updatePageLabel() }
         }
         center.addObserver(forName: .PDFViewSelectionChanged, object: pdfView, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.flushNote() }
+            MainActor.assumeIsolated {
+                self?.flushNote()
+                if self?.hasTextSelection == false { self?.hideColorPopup() }
+            }
+        }
+        center.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.placeColorPopup() }
         }
         center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.sync() }
@@ -515,6 +525,7 @@ final class AppModel: ObservableObject {
 
     func select(_ id: String?) {
         if id == selectedID { return }
+        if id != nil { hideColorPopup() }
         flushNote()
         selectedID = id
         selected = id.flatMap { try? store?.highlight(id: $0) } ?? nil
@@ -562,6 +573,7 @@ final class AppModel: ObservableObject {
             MainActor.assumeIsolated {
                 let model = AppModel.shared
                 if Date() > model.ignoreScrollUntil { model.hideDetails() }
+                model.placeColorPopup()
             }
         }
     }
@@ -627,8 +639,43 @@ final class AppModel: ObservableObject {
     }
 
     func selectionEnded() {
-        guard highlighterOn, hasTextSelection else { return }
-        applyColor(penColor)
+        guard hasTextSelection else { return }
+        if highlighterOn {
+            applyColor(penColor)
+        } else {
+            select(nil)
+            placeColorPopup(show: true)
+        }
+    }
+
+    /// Puts the color popup above the selected text, or below it when there is no room above.
+    /// Hides it when the selection is scrolled out of view.
+    func placeColorPopup(show: Bool = false) {
+        guard show || colorPopupAt != nil else { return }
+        guard hasTextSelection, let selection = pdfView.currentSelection else { hideColorPopup(); return }
+        let bounds = pdfView.bounds
+        let rect = selection.pages.map { pdfView.convert(selection.bounds(for: $0), from: $0) }
+            .reduce(CGRect.null) { $0.union($1) }
+            .intersection(bounds)
+        guard !rect.isNull, !rect.isEmpty else { hideColorPopup(); return }
+        let size = Self.colorPopupSize
+        let gap: CGFloat = 6
+        let top = pdfView.isFlipped ? rect.minY - bounds.minY : bounds.maxY - rect.maxY
+        var y = top - gap - size.height / 2
+        if y - size.height / 2 < gap { y = top + rect.height + gap + size.height / 2 }
+        y = min(y, bounds.height - gap - size.height / 2)
+        let x = min(max(rect.midX - bounds.minX, gap + size.width / 2), bounds.width - gap - size.width / 2)
+        colorPopupAt = CGPoint(x: x, y: y)
+    }
+
+    func hideColorPopup() {
+        if colorPopupAt != nil { colorPopupAt = nil }
+    }
+
+    func pickColor(_ color: HighlightColor) {
+        penColor = color
+        applyColor(color)
+        hideColorPopup()
     }
 
     func applyColor(_ color: HighlightColor) {
@@ -718,6 +765,7 @@ final class AppModel: ObservableObject {
     }
 
     func open(result r: SearchResult) {
+        hideColorPopup()
         if let id = r.highlightID {
             goToHighlight(id: id, page: r.page)
         } else {
@@ -777,8 +825,19 @@ final class AppModel: ObservableObject {
             let code = event.keyCode
             let plain = event.modifierFlags.intersection([.command, .option, .control]).isEmpty
             let window = event.window
+            let digit = event.charactersIgnoringModifiers.flatMap { Int($0) }
             let handled = MainActor.assumeIsolated { () -> Bool in
                 let model = AppModel.shared
+                if model.colorPopupAt != nil, plain, window === model.pdfView.window, !(window?.firstResponder is NSText) {
+                    if code == 53 {
+                        model.hideColorPopup()
+                        return true
+                    }
+                    if let c = digit.flatMap(HighlightColor.init(rawValue:)), c != .noteOnly {
+                        model.pickColor(c)
+                        return true
+                    }
+                }
                 if code == 53, plain, window === model.pdfView.window, model.highlighterOn, !model.searchFieldFocused {
                     model.highlighterOn = false
                     return true

@@ -133,6 +133,12 @@ struct ContentView: View {
         } detail: {
             HSplitView {
             ReaderView(model: model)
+                .overlay {
+                    if let at = model.colorPopupAt {
+                        ColorPopup { model.pickColor($0) }
+                            .position(at)
+                    }
+                }
                 .overlay(alignment: .topTrailing) {
                     if !sidebarShown, model.isSearching, model.showResultsPanel {
                         SearchResultsView(model: model, pagesOnly: false, onClose: { model.showResultsPanel = false })
@@ -202,6 +208,45 @@ struct ContentView: View {
         .sheet(isPresented: $model.showImport) { ImportView(model: model) }
         .navigationTitle(model.bookTitle)
         .task { model.start() }
+    }
+}
+
+/// The bar of color dots that pops up over selected text.
+struct ColorPopup: View {
+    let pick: (HighlightColor) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(HighlightColor.highlightColors, id: \.self) { c in
+                ColorPopupButton(color: c) { pick(c) }
+            }
+        }
+        .frame(width: AppModel.colorPopupSize.width, height: AppModel.colorPopupSize.height)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12)))
+        .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
+    }
+}
+
+private struct ColorPopupButton: View {
+    let color: HighlightColor
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Circle()
+                .fill(swatch(color))
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.15)))
+                .frame(width: 20, height: 20)
+                .scaleEffect(hovering ? 1.2 : 1)
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.1), value: hovering)
+        .help("\(color.name.capitalized) (\(color.rawValue))")
     }
 }
 

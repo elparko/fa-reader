@@ -53,6 +53,38 @@ final class SelfCheck {
         return page.selection(for: NSRange(range, in: s))
     }
 
+    private func popupAboveSelection() -> Bool {
+        let view = model.pdfView
+        guard let at = model.colorPopupAt, let sel = view.currentSelection, let page = sel.pages.first else { return false }
+        let r = view.convert(sel.bounds(for: page), from: page)
+        let top = view.isFlipped ? r.minY : view.bounds.maxY - r.maxY
+        return at.y < top && abs(at.x - r.midX) < AppModel.colorPopupSize.width
+    }
+
+    /// A point in window coordinates, offset from the center of the color popup (dy grows downward).
+    private func popupPoint(dx: CGFloat, dy: CGFloat = 0) -> NSPoint? {
+        let view = model.pdfView
+        guard let at = model.colorPopupAt else { return nil }
+        let p = CGPoint(x: at.x + dx, y: view.isFlipped ? at.y + dy : view.bounds.height - at.y - dy)
+        return view.convert(p, to: nil)
+    }
+
+    private func hitsPDF(_ point: NSPoint) -> Bool {
+        guard let content = model.pdfView.window?.contentView, let frame = content.superview else { return false }
+        return content.hitTest(frame.convert(point, from: nil))?.isDescendant(of: model.pdfView) ?? false
+    }
+
+    private func click(_ point: NSPoint) {
+        guard let window = model.pdfView.window else { return }
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            if let e = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                          windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                                          pressure: type == .leftMouseDown ? 1 : 0) {
+                NSApp.postEvent(e, atStart: false)
+            }
+        }
+    }
+
     private func ourAnnotations(page index: Int, id: String) -> Int {
         model.document?.page(at: index)?.annotations.filter { $0.userName == "fa:\(id)" }.count ?? 0
     }
@@ -269,9 +301,56 @@ final class SelfCheck {
                 model.pdfView.setCurrentSelection(sel2, animate: false)
                 model.selectionEnded()
                 check("highlighter off leaves selection alone", !((try? store.highlights(page: graves)) ?? []).contains { $0.text.contains("Thyroid storm") })
+                check("selecting text shows the color popup above it", popupAboveSelection(), model.colorPopupAt.map { "\($0)" } ?? "nil")
                 model.toolbarColor(.blue)
                 let blue = (try? store.highlights(page: graves))?.first { $0.text.contains("Thyroid storm") }
                 check("toolbar color with text selected highlights it", blue?.highlightColor == .blue)
+                check("highlighting closes the color popup", model.colorPopupAt == nil)
+            }
+            if let sel = select("Causes of goiter", page: graves) {
+                model.pdfView.go(to: sel)
+                model.pdfView.setCurrentSelection(sel, animate: false)
+                model.selectionEnded()
+                await pause(0.4)
+                if let view = model.pdfView.window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: report.deletingLastPathComponent().appendingPathComponent("popup.png"))
+                }
+                let pinkDot = popupPoint(dx: 15)
+                let page = popupPoint(dx: 0, dy: (model.colorPopupAt?.y ?? 0) > model.pdfView.bounds.height / 2 ? -120 : 120)
+                check("the popup takes clicks and the page around it still does",
+                      pinkDot.map { !hitsPDF($0) } == true && page.map(hitsPDF) == true, "\(pinkDot.map { "\($0)" } ?? "nil") \(page.map { "\($0)" } ?? "nil")")
+                if let pinkDot { click(pinkDot) }
+                await pause(0.4)
+                let pink = (try? store.highlights(page: graves))?.first { $0.text.contains("Causes of goiter") }
+                check("clicking a color in the popup highlights the selection", pink?.highlightColor == .pink && model.colorPopupAt == nil && !model.hasTextSelection,
+                      pink.map { "\($0.text) \($0.highlightColor.name)" } ?? "none")
+            }
+            model.pdfView.window?.makeFirstResponder(model.pdfView)
+            if let sel = select("Wolff-Chaikoff", page: graves), let window = model.pdfView.window,
+               let two = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, characters: "2", charactersIgnoringModifiers: "2", isARepeat: false, keyCode: 19) {
+                model.pdfView.go(to: sel)
+                model.pdfView.setCurrentSelection(sel, animate: false)
+                model.selectionEnded()
+                NSApp.postEvent(two, atStart: false)
+                await pause(0.3)
+                let green = (try? store.highlights(page: graves))?.first { $0.text.contains("Wolff-Chaikoff") }
+                check("pressing 2 with the popup open highlights green", green?.highlightColor == .green && model.colorPopupAt == nil,
+                      green.map { "\($0.text) \($0.highlightColor.name)" } ?? "none")
+            }
+            if let sel = select("struma ovarii", page: graves), let window = model.pdfView.window,
+               let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) {
+                model.pdfView.go(to: sel)
+                model.pdfView.setCurrentSelection(sel, animate: false)
+                model.selectionEnded()
+                let shown = model.colorPopupAt != nil
+                NSApp.postEvent(esc, atStart: false)
+                await pause(0.3)
+                check("Esc closes the color popup and keeps the selection", shown && model.colorPopupAt == nil && model.hasTextSelection
+                      && !((try? store.highlights(page: graves)) ?? []).contains { $0.text.contains("struma ovarii") })
+                model.pdfView.clearSelection()
             }
             model.highlighterOn = true
             model.pdfView.window?.makeFirstResponder(model.pdfView)

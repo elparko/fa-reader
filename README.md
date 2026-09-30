@@ -61,11 +61,13 @@ Each section file has an automatic highlights block between `<!-- fa-reader:high
 
 ## Highlighting
 
-The toolbar, next to the zoom buttons, has a highlighter button and four color dots.
+Select text and a bar of four color dots pops up above it. Click a color, or press 1 to 4 (yellow, green, pink, blue), and the text is highlighted. Esc or clicking elsewhere closes the bar and leaves the text selected. The bar follows the text when you scroll or zoom.
+
+The toolbar, next to the zoom buttons, also has a highlighter button and four color dots.
 
 - Select text, then click a color: the text is highlighted in that color.
 - Click a highlight, then click a color: the highlight changes color.
-- Click a color with nothing selected: highlighter mode turns on with that color. Every selection you make is highlighted when you release the mouse. Click the highlighter button or press Esc to turn it off.
+- Click a color with nothing selected: highlighter mode turns on with that color. Every selection you make is highlighted when you release the mouse, without the popup. Click the highlighter button or press Esc to turn it off.
 - Right-click selected text to highlight it, or right-click a highlight to change its color, edit its note or delete it.
 
 ## Keyboard shortcuts
@@ -73,6 +75,8 @@ The toolbar, next to the zoom buttons, has a highlighter button and four color d
 | Keys | Action |
 | --- | --- |
 | Cmd+1, 2, 3, 4 | Highlight the selected text yellow, green, pink, blue. With a highlight selected and no text selected, change its color. |
+| 1, 2, 3, 4 (color popup open) | Highlight the selected text yellow, green, pink, blue |
+| Esc (color popup open) | Close the popup |
 | Cmd+Delete | Delete the selected highlight |
 | Cmd+Shift+N | Edit the note of the selected highlight |
 | Cmd+Return | Save the note |
@@ -134,7 +138,7 @@ Each highlight line ends with `<!-- fa:<id> -->`, a stable ID another tool can k
     "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --measure-open --exit
     "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --self-check report.json
 
-`--self-check` runs without taking focus. It highlights text with Cmd+1, recolors with Cmd+3, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
+`--self-check` runs without taking focus. It highlights text with Cmd+1, recolors with Cmd+3, highlights from the color popup with a mouse click and with the 2 key, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
 
 ## Updates
 
