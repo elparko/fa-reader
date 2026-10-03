@@ -47,6 +47,7 @@ The app reads other devices' logs every 5 seconds and when it becomes active.
 
 ## Layout
 
+- Each book opens at fit width, on the page you last had open.
 - The search field is in the toolbar and always works. Cmd+F focuses it.
 - The sidebar is hidden by default. Show it with the sidebar button in the toolbar or View > Show Sidebar (Cmd+Ctrl+S). With the sidebar hidden, search results appear in a panel under the search field; with it shown, they appear in the sidebar.
 - The button at the top of the sidebar switches between chapters with result text, and page images only (page thumbnails, or result thumbnails while searching).
@@ -128,6 +129,7 @@ The highlighter tab at the top of the sidebar lists every highlight. Highlight >
 | Cmd+F | Focus the search field |
 | Up / Down (in the search field) | Step through results; the page jumps to each one |
 | Return (in the search field) | Open the selected result |
+| Esc (after opening a result) | Clear the match highlighting on the page; the search stays |
 | Cmd+G, Cmd+Shift+G | Next, previous result |
 | Cmd+Y | History |
 | Cmd+Shift+E | Export Markdown |
@@ -136,7 +138,7 @@ The highlighter tab at the top of the sidebar lists every highlight. Highlight >
 
 Notes can contain `#tags`. Search filters by color, section, and tag.
 
-Each search result shows a thumbnail of its page with the match outlined in red. Opening a book-text result highlights every match on that page.
+A search of two or more words lists results with the exact phrase first, then results that have every word in any order. Each search result shows a thumbnail of its page with the match outlined in red. Opening a book-text result highlights every match on that page: the whole phrase where the page has it, otherwise each word.
 
 "Go to page" accepts a printed book page (`346`) or a PDF page (`pdf 367`).
 
@@ -183,7 +185,7 @@ Each highlight line ends with `<!-- fa:<id> -->`, a stable ID another tool can k
     "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --measure-open --exit
     "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --self-check report.json
 
-`--self-check` runs without taking focus or playing sounds. Add `--visible` to keep the window on screen and save screenshots of the highlight bar, the liver page and the highlights list next to the report. It highlights text with Cmd+1, recolors with Cmd+3, highlights from the color popup with a mouse click and with the 2 key, checks that a drag drifting below its line selects one line, checks word snapping, merging, splitting, removing part of a highlight, Tidy and undo of each, filters and groups the highlights list, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
+`--self-check` runs without taking focus or playing sounds. Add `--visible` to keep the window on screen and save screenshots of the highlight bar, the liver page and the highlights list next to the report. It highlights text with Cmd+1, recolors with Cmd+3, highlights from the color popup with a mouse click and with the 2 key, checks that a drag drifting below its line selects one line, checks word snapping, merging, splitting, removing part of a highlight, Tidy and undo of each, filters and groups the highlights list, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, checks that Esc clears page matches and that a two-word search marks the whole phrase, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
 
 ## Updates
 

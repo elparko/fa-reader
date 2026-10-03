@@ -68,6 +68,22 @@ private func percentile95(_ values: [Double]) -> Double {
     #expect(try searcher.search("thyro").map(\.page).sorted() == [5])
 }
 
+@Test func exactPhraseComesBeforeSeparateTerms() throws {
+    let store = try makeStore()
+    try addPage(store.db, 4, "adenocarcinoma of the lung; pancreatic enzymes")
+    try addPage(store.db, 5, "Pancreatic adenocarcinoma presents with painless jaundice")
+    try addPage(store.db, 6, "pancreatic adenocarcinoma, tumor marker CA 19-9")
+    let partial = Highlight(page: 4, rects: [], text: "pancreatic enzymes and adenocarcinoma", color: .yellow)
+    let exact = Highlight(page: 5, rects: [], text: "Pancreatic adenocarcinoma", color: .blue)
+    try store.add([partial, exact])
+    let searcher = Searcher(database: store.db)
+    #expect(Searcher.phraseQuery("pancreatic adeno") == "\"pancreatic adeno\"*")
+    #expect(Searcher.phraseQuery("pancreatic") == nil)
+    let results = try searcher.search("pancreatic adeno")
+    #expect(results.map(\.id) == ["highlight:\(exact.id)", "book:5", "book:6", "highlight:\(partial.id)", "book:4"])
+    #expect(Set(results.map(\.id)).count == results.count)
+}
+
 @Test func snippetMarksMatchedTerms() throws {
     let store = try makeStore()
     try addPage(store.db, 4, "Graves disease causes hyperthyroidism through TSH receptor antibodies")

@@ -220,6 +220,11 @@ final class SelfCheck {
         let (noteResults, _) = await search("hyperthyroidism")
         check("search finds note", noteResults.first.map { $0.kind == .note && $0.highlightID == h.id } ?? false, noteResults.prefix(4).map { "\($0.kind) \($0.page)" })
         check("search finds book page", graveResults.contains { $0.kind == .book && $0.page == graves })
+        let (phraseResults, _) = await search("graves disease")
+        let phrasePage = phraseResults.first.flatMap { model.document?.page(at: $0.page) }
+        let phraseMarks = phrasePage.map { PageMatches.selections(page: $0, terms: ["graves", "disease"]) } ?? []
+        check("two-word search lists and marks the whole phrase first", !phraseMarks.isEmpty
+              && phraseMarks.allSatisfy { ($0.string ?? "").lowercased().contains("disease") }, phraseMarks.map { $0.string ?? "" })
         let (pinkResults, _) = await search("", filter: SearchFilter(color: .pink))
         check("color filter", pinkResults.contains { $0.highlightID == h.id } && pinkResults.allSatisfy { $0.color == .pink })
         let (tagResults, _) = await search("", filter: SearchFilter(tag: "thyroid"))
@@ -260,6 +265,13 @@ final class SelfCheck {
                       model.pdfView.highlightedSelections?.count ?? 0)
                 let thumb = await model.thumbnailer?.thumbnail(page: book.page, marks: nil, terms: ["hyperthyroidism"])
                 check("result thumbnail renders", (thumb?.size.width ?? 0) > 0, thumb.map { "\($0.size)" } ?? "nil")
+                if let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: field.window?.windowNumber ?? 0,
+                                              context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) {
+                    NSApp.postEvent(esc, atStart: false)
+                    await pause(0.3)
+                    check("Esc in the search field clears the page matches and keeps the search", model.pdfView.highlightedSelections == nil
+                          && model.query == "hyperthyroidism" && model.searchFieldFocused)
+                }
             }
             _ = press("g", keyCode: 5)
             await pause(0.3)

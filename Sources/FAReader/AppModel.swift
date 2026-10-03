@@ -305,11 +305,13 @@ final class AppModel: ObservableObject {
         undoStack = (try? newStore.recentChanges()) ?? []
         redoStack = []
         notice = nil
+        let lastPage = UserDefaults.standard.object(forKey: "lastPage:\(url.path)") as? Int
         pdfURL = url
         document = doc
         pdfView.document = doc
+        pdfView.autoScales = true
         watchScrolling()
-        if let last = UserDefaults.standard.object(forKey: "lastPage:\(url.path)") as? Int, let page = doc.page(at: last) {
+        if let lastPage, let page = doc.page(at: lastPage) {
             pdfView.go(to: page)
         }
         printedCache = [:]
@@ -1065,6 +1067,11 @@ final class AppModel: ObservableObject {
         pdfView.go(to: first)
     }
 
+    func clearMatches() {
+        pdfView.highlightedSelections = nil
+        pdfView.clearSelection()
+    }
+
     func moveResult(_ delta: Int) {
         guard !results.isEmpty else { return }
         let current = selectedResultID.flatMap { id in results.firstIndex { $0.id == id } }
@@ -1132,6 +1139,11 @@ final class AppModel: ObservableObject {
                         model.pickColor(c)
                         return true
                     }
+                }
+                if code == 53, plain, window === model.pdfView.window, model.pdfView.highlightedSelections != nil,
+                   model.searchFieldFocused || !(window?.firstResponder is NSText) {
+                    model.clearMatches()
+                    return true
                 }
                 if code == 53, plain, window === model.pdfView.window, model.highlighterOn, !model.searchFieldFocused {
                     model.highlighterOn = false

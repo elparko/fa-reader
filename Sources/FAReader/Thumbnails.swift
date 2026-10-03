@@ -9,6 +9,13 @@ enum PageMatches {
     static func selections(page: PDFPage, terms: [String], limit: Int = 60) -> [PDFSelection] {
         guard !terms.isEmpty, let text = page.string else { return [] }
         let ns = text as NSString
+        if terms.count > 1 {
+            let phrase = terms.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "[^\\p{L}\\p{N}]+")
+            let regex = try? NSRegularExpression(pattern: "(?<![\\p{L}\\p{N}])" + phrase, options: [.caseInsensitive])
+            let exact = (regex?.matches(in: text, range: NSRange(location: 0, length: ns.length)) ?? [])
+                .prefix(limit).compactMap { page.selection(for: $0.range) }
+            if !exact.isEmpty { return exact }
+        }
         var found: [(Int, PDFSelection)] = []
         for term in terms {
             var start = 0

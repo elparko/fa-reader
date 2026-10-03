@@ -41,7 +41,7 @@ public final class Searcher {
         db = database
     }
 
-    public static func ftsQuery(_ text: String) -> String? {
+    static func tokens(_ text: String) -> [String] {
         var tokens: [String] = []
         var current = ""
         for ch in text {
@@ -53,8 +53,19 @@ public final class Searcher {
             }
         }
         if !current.isEmpty { tokens.append(current) }
+        return tokens
+    }
+
+    public static func ftsQuery(_ text: String) -> String? {
+        let tokens = tokens(text)
         guard !tokens.isEmpty else { return nil }
         return tokens.map { "\"\($0)\"*" }.joined(separator: " ")
+    }
+
+    public static func phraseQuery(_ text: String) -> String? {
+        let tokens = tokens(text)
+        guard tokens.count > 1 else { return nil }
+        return "\"\(tokens.joined(separator: " "))\"*"
     }
 
     public func search(_ text: String, filter: SearchFilter = SearchFilter(), limit: Int = 60) throws -> [SearchResult] {
@@ -62,13 +73,23 @@ public final class Searcher {
             return filter.isEmpty ? [] : try listHighlights(filter: filter, limit: limit)
         }
         let anyTerm = query.split(separator: " ").joined(separator: " OR ")
-        let noteIDs = Set(try highlightRows(match: "{note tags} : (\(anyTerm))", filter: filter, limit: -1).map(\.id))
-        let all = try highlightRows(match: query, filter: filter, limit: -1)
+        guard let phrase = Searcher.phraseQuery(text) else {
+            return try search(match: query, noteMatch: anyTerm, filter: filter, limit: limit)
+        }
+        let exact = try search(match: phrase, noteMatch: phrase, filter: filter, limit: limit)
+        let seen = Set(exact.map { $0.highlightID ?? $0.id })
+        let partial = try search(match: query, noteMatch: anyTerm, filter: filter, limit: limit)
+        return exact + partial.filter { !seen.contains($0.highlightID ?? $0.id) }
+    }
+
+    private func search(match: String, noteMatch: String, filter: SearchFilter, limit: Int) throws -> [SearchResult] {
+        let noteIDs = Set(try highlightRows(match: "{note tags} : (\(noteMatch))", filter: filter, limit: -1).map(\.id))
+        let all = try highlightRows(match: match, filter: filter, limit: -1)
         let notes = all.filter { noteIDs.contains($0.id) }.prefix(limit)
         var results = notes.map { result($0, kind: .note) }
         results += all.filter { !noteIDs.contains($0.id) }.prefix(limit).map { result($0, kind: .highlight) }
         if filter.color == nil, filter.tag == nil {
-            results += try bookRows(match: query, pages: filter.pages, limit: limit)
+            results += try bookRows(match: match, pages: filter.pages, limit: limit)
         }
         return results
     }
