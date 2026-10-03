@@ -133,7 +133,19 @@ final class AppModel: ObservableObject {
         didSet { if !isTestRun { UserDefaults.standard.set(penColor.rawValue, forKey: "penColor") } }
     }
     /// Center of the color popup over the selected text, in the PDF view with the origin at the top left. Nil when hidden.
-    @Published private(set) var colorPopupAt: CGPoint?
+    private(set) var colorPopupAt: CGPoint? { didSet { moveColorPopupView() } }
+    private(set) lazy var colorPopupView: NSView = {
+        let host = ColorPopupHost(rootView: ColorPopup())
+        host.pick = { [weak self] in self?.pickColor($0) }
+        host.frame.size = Self.colorPopupSize
+        host.wantsLayer = true
+        let shadow = NSShadow()
+        shadow.shadowColor = .black.withAlphaComponent(0.2)
+        shadow.shadowBlurRadius = 6
+        shadow.shadowOffset = NSSize(width: 0, height: -2)
+        host.shadow = shadow
+        return host
+    }()
     static let colorPopupSize = CGSize(width: 136, height: 36)
     @Published var recentBooks: [String] = UserDefaults.standard.stringArray(forKey: "recentPDFs") ?? []
     @Published var selectedResultID: String?
@@ -666,6 +678,15 @@ final class AppModel: ObservableObject {
         y = min(y, bounds.height - gap - size.height / 2)
         let x = min(max(rect.midX - bounds.minX, gap + size.width / 2), bounds.width - gap - size.width / 2)
         colorPopupAt = CGPoint(x: x, y: y)
+    }
+
+    private func moveColorPopupView() {
+        guard let at = colorPopupAt else { colorPopupView.removeFromSuperview(); return }
+        let size = Self.colorPopupSize
+        let bounds = pdfView.bounds
+        let y = pdfView.isFlipped ? bounds.minY + at.y : bounds.maxY - at.y
+        colorPopupView.frame = CGRect(x: bounds.minX + at.x - size.width / 2, y: y - size.height / 2, width: size.width, height: size.height)
+        if colorPopupView.superview !== pdfView { pdfView.addSubview(colorPopupView) }
     }
 
     func hideColorPopup() {

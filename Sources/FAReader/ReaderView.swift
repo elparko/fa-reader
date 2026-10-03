@@ -38,7 +38,11 @@ final class HighlightPDFView: PDFView {
             onHit?(nil)
         }
         selecting = true
-        super.mouseDown(with: event)
+        if event.clickCount == 1, !event.modifierFlags.contains(.shift), let start = lineStart(event) {
+            trackSelection(from: start)
+        } else {
+            super.mouseDown(with: event)
+        }
         if NSEvent.pressedMouseButtons & 1 == 0 { endSelection() }
     }
 
@@ -53,6 +57,33 @@ final class HighlightPDFView: PDFView {
     override func mouseUp(with event: NSEvent) {
         super.mouseUp(with: event)
         endSelection()
+    }
+
+    private func lineStart(_ event: NSEvent) -> (page: PDFPage, x: CGFloat, line: CGRect)? {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let page = page(for: point, nearest: false) else { return nil }
+        let local = convert(point, to: page)
+        guard let line = page.selectionForLine(at: local)?.bounds(for: page), line.height > 0,
+              line.insetBy(dx: -2, dy: 0).contains(local) else { return nil }
+        return (page, local.x, line)
+    }
+
+    /// Text lines in the PDF overlap, so PDFKit's own drag picks up the next line as soon as the mouse drifts a little low.
+    /// This drag stays on the starting line until the mouse is 0.75 of a line height away from it.
+    private func trackSelection(from start: (page: PDFPage, x: CGFloat, line: CGRect)) {
+        window?.makeFirstResponder(self)
+        clearSelection()
+        while let event = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if event.type == .leftMouseDragged { documentView?.autoscroll(with: event) }
+            let point = convert(event.locationInWindow, from: nil)
+            if let document, let page = page(for: point, nearest: true) {
+                var local = convert(point, to: page)
+                if page == start.page, abs(local.y - start.line.midY) < start.line.height * 0.75 { local.y = start.line.midY }
+                let from = CGPoint(x: start.x, y: start.line.midY)
+                setCurrentSelection(document.selection(from: start.page, at: from, to: page, at: local), animate: false)
+            }
+            if event.type == .leftMouseUp { break }
+        }
     }
 
     private func endSelection() {
@@ -141,12 +172,6 @@ struct ContentView: View {
         } detail: {
             HSplitView {
             ReaderView(model: model)
-                .overlay {
-                    if let at = model.colorPopupAt {
-                        ColorPopup { model.pickColor($0) }
-                            .position(at)
-                    }
-                }
                 .overlay(alignment: .topTrailing) {
                     if !sidebarShown, model.isSearching, model.showResultsPanel {
                         SearchResultsView(model: model, pagesOnly: false, onClose: { model.showResultsPanel = false })
@@ -221,40 +246,50 @@ struct ContentView: View {
 
 /// The bar of color dots that pops up over selected text.
 struct ColorPopup: View {
-    let pick: (HighlightColor) -> Void
+    static let dot: CGFloat = 26
+    static let gap: CGFloat = 4
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(HighlightColor.highlightColors, id: \.self) { c in
-                ColorPopupButton(color: c) { pick(c) }
-            }
+        HStack(spacing: Self.gap) {
+            ForEach(HighlightColor.highlightColors, id: \.self) { ColorPopupDot(color: $0) }
         }
         .frame(width: AppModel.colorPopupSize.width, height: AppModel.colorPopupSize.height)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12)))
-        .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
     }
 }
 
-private struct ColorPopupButton: View {
+/// Hosts the color popup as an AppKit subview of the PDF view and handles its clicks itself,
+/// so a click works even when the window is not yet active.
+final class ColorPopupHost: NSHostingView<ColorPopup> {
+    var pick: ((HighlightColor) -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        let colors = HighlightColor.highlightColors
+        let x = convert(event.locationInWindow, from: nil).x
+        let left = (bounds.width - CGFloat(colors.count) * ColorPopup.dot - CGFloat(colors.count - 1) * ColorPopup.gap) / 2
+        let i = Int(((x - left + ColorPopup.gap / 2) / (ColorPopup.dot + ColorPopup.gap)).rounded(.down))
+        if colors.indices.contains(i) { pick?(colors[i]) }
+    }
+}
+
+private struct ColorPopupDot: View {
     let color: HighlightColor
-    let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
-        Button(action: action) {
-            Circle()
-                .fill(swatch(color))
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.15)))
-                .frame(width: 20, height: 20)
-                .scaleEffect(hovering ? 1.2 : 1)
-                .frame(width: 26, height: 26)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.1), value: hovering)
-        .help("\(color.name.capitalized) (\(color.rawValue))")
+        Circle()
+            .fill(swatch(color))
+            .overlay(Circle().strokeBorder(Color.primary.opacity(0.15)))
+            .frame(width: 20, height: 20)
+            .scaleEffect(hovering ? 1.2 : 1)
+            .frame(width: ColorPopup.dot, height: ColorPopup.dot)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.1), value: hovering)
+            .help("\(color.name.capitalized) (\(color.rawValue))")
     }
 }
 

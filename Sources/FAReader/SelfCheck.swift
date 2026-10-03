@@ -71,7 +71,8 @@ final class SelfCheck {
 
     private func hitsPDF(_ point: NSPoint) -> Bool {
         guard let content = model.pdfView.window?.contentView, let frame = content.superview else { return false }
-        return content.hitTest(frame.convert(point, from: nil))?.isDescendant(of: model.pdfView) ?? false
+        guard let hit = content.hitTest(frame.convert(point, from: nil)) else { return false }
+        return hit.isDescendant(of: model.pdfView) && !hit.isDescendant(of: model.colorPopupView)
     }
 
     private func click(_ point: NSPoint) {
@@ -83,6 +84,19 @@ final class SelfCheck {
                 NSApp.postEvent(e, atStart: false)
             }
         }
+    }
+
+    /// Queues the drag and release, then presses the mouse; the PDF view reads the queued events in its own drag loop.
+    private func drag(_ points: [NSPoint]) {
+        guard let window = model.pdfView.window, let first = points.first, let last = points.last else { return }
+        func event(_ type: NSEvent.EventType, _ point: NSPoint) -> NSEvent? {
+            NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                               pressure: type == .leftMouseUp ? 0 : 1)
+        }
+        for p in points.dropFirst() { if let e = event(.leftMouseDragged, p) { NSApp.postEvent(e, atStart: false) } }
+        if let e = event(.leftMouseUp, last) { NSApp.postEvent(e, atStart: false) }
+        if let e = event(.leftMouseDown, first) { model.pdfView.mouseDown(with: e) }
     }
 
     private func ourAnnotations(page index: Int, id: String) -> Int {
@@ -361,6 +375,28 @@ final class SelfCheck {
                 await pause(0.3)
                 check("Esc closes the color popup and keeps the selection", shown && model.colorPopupAt == nil && model.hasTextSelection
                       && !((try? store.highlights(page: graves)) ?? []).contains { $0.text.contains("struma ovarii") })
+                model.pdfView.clearSelection()
+            }
+            if let sel = select("Focal patches", page: graves), let page = document.page(at: graves),
+               let line = page.selectionForLine(at: CGPoint(x: sel.bounds(for: page).midX, y: sel.bounds(for: page).midY))?.bounds(for: page) {
+                model.pdfView.go(to: sel)
+                await pause(0.3)
+                func dragAlong(drop: CGFloat) async -> [String] {
+                    model.pdfView.clearSelection()
+                    let points = (0...10).map { i -> NSPoint in
+                        let t = CGFloat(i) / 10
+                        let p = CGPoint(x: line.minX + 2 + t * (line.width - 30), y: line.midY - t * drop * line.height)
+                        return model.pdfView.convert(model.pdfView.convert(p, from: page), to: nil)
+                    }
+                    drag(points)
+                    await pause(0.4)
+                    return model.pdfView.currentSelection?.selectionsByLine().compactMap(\.string) ?? []
+                }
+                let drift = await dragAlong(drop: 0.6)
+                check("a drag that drifts below its line selects that line only", drift.count == 1 && drift.first?.hasPrefix("Focal") == true, drift)
+                let down = await dragAlong(drop: 1.3)
+                check("a drag into the next line selects both lines", down.count == 2, down)
+                model.hideColorPopup()
                 model.pdfView.clearSelection()
             }
             model.highlighterOn = true

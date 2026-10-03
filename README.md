@@ -63,6 +63,8 @@ Each section file has an automatic highlights block between `<!-- fa-reader:high
 
 Select text and a bar of four color dots pops up above it. Click a color, or press 1 to 4 (yellow, green, pink, blue), and the text is highlighted. Esc or clicking elsewhere closes the bar and leaves the text selected. The bar follows the text when you scroll or zoom.
 
+A drag stays on the line where it started until the mouse moves most of a line height up or down. The text lines in the PDF overlap, so without this a slightly low drag would also select the next line.
+
 The toolbar, next to the zoom buttons, also has a highlighter button and four color dots.
 
 - Select text, then click a color: the text is highlighted in that color.
@@ -138,7 +140,7 @@ Each highlight line ends with `<!-- fa:<id> -->`, a stable ID another tool can k
     "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --measure-open --exit
     "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --self-check report.json
 
-`--self-check` runs without taking focus. It highlights text with Cmd+1, recolors with Cmd+3, highlights from the color popup with a mouse click and with the 2 key, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
+`--self-check` runs without taking focus. It highlights text with Cmd+1, recolors with Cmd+3, highlights from the color popup with a mouse click and with the 2 key, checks that a drag drifting below its line selects one line, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
 
 ## Updates
 
