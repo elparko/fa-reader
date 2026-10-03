@@ -10,6 +10,8 @@ public final class Store {
     public var clock: () -> Double = { Date().timeIntervalSince1970 }
     public var sessionGap: Double = 30 * 60
     public private(set) var revision = 0
+    public private(set) var commitCount = 0
+    public private(set) var lastCommitted: [PendingOp] = []
 
     private var editSession: Session?
     private var lastEditTs: Double = 0
@@ -174,7 +176,49 @@ public final class Store {
         } else {
             editSession = nil
         }
+        commitCount += 1
+        lastCommitted = plan.ops
         return session
+    }
+
+    /// The ops that put highlights back the way they were before `ops`, skipping any whose highlight has changed since.
+    public func revert(_ ops: [PendingOp]) throws -> [PendingOp] {
+        var state: [String: Highlight?] = [:]
+        func current(_ hid: String) throws -> Highlight? {
+            if let cached = state[hid] { return cached }
+            let h = try highlight(id: hid)
+            state[hid] = .some(h)
+            return h
+        }
+        var out: [PendingOp] = []
+        for op in ops.reversed() {
+            let cur = try current(op.highlight)
+            switch op.kind {
+            case .add:
+                if let cur {
+                    out.append(.delete(cur))
+                    state[op.highlight] = .some(nil)
+                }
+            case .delete:
+                if cur == nil, let snap = op.snapshot {
+                    out.append(.add(snap))
+                    state[op.highlight] = .some(snap)
+                }
+            case .color:
+                if var cur, cur.color == op.newColor, let old = op.oldColor {
+                    out.append(.color(cur, to: old))
+                    cur.color = old
+                    state[op.highlight] = .some(cur)
+                }
+            case .note:
+                if var cur, cur.note == op.newNote, let old = op.oldNote {
+                    out.append(.note(cur, to: old))
+                    cur.note = old
+                    state[op.highlight] = .some(cur)
+                }
+            }
+        }
+        return out
     }
 
     // MARK: History and undo

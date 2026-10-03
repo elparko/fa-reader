@@ -397,6 +397,49 @@ private func pageHighlights(_ n: Int, prefix: String = "p") -> [Highlight] {
     (0..<n).map { makeHighlight("\(prefix)\($0)", page: $0) }
 }
 
+@Test func lastCommittedHoldsTheNewestPlansOps() throws {
+    let store = try makeStore(tempFolder())
+    try store.add([makeHighlight("a"), makeHighlight("b")])
+    #expect(store.commitCount == 1)
+    #expect(store.lastCommitted.map(\.highlight) == ["a", "b"])
+    try store.setNote("a", "same")
+    try store.setNote("a", "same")
+    #expect(store.commitCount == 2)
+}
+
+@Test func revertUndoesEachKindOfChangeAndRevertingAgainRedoes() throws {
+    let store = try makeStore(tempFolder())
+    try store.add([makeHighlight("a", note: "old")])
+    try store.setColor(["a"], .pink)
+    let color = store.lastCommitted
+    try store.setNote("a", "new")
+    let note = store.lastCommitted
+    try store.delete(["a"])
+    let delete = store.lastCommitted
+
+    let back = try store.revert(delete)
+    try store.commit(Plan(kind: .edit, label: "Edit", ops: back))
+    #expect(try store.highlight(id: "a")?.note == "new")
+    try store.commit(Plan(kind: .edit, label: "Edit", ops: try store.revert(note)))
+    #expect(try store.highlight(id: "a")?.note == "old")
+    try store.commit(Plan(kind: .edit, label: "Edit", ops: try store.revert(color)))
+    #expect(try store.highlight(id: "a")?.highlightColor == .yellow)
+
+    try store.commit(Plan(kind: .edit, label: "Edit", ops: try store.revert(back)))
+    #expect(try store.highlight(id: "a") == nil)
+}
+
+@Test func revertSkipsChangesOverriddenSince() throws {
+    let store = try makeStore(tempFolder())
+    try store.add([makeHighlight("a")])
+    try store.setColor(["a"], .pink)
+    let pink = store.lastCommitted
+    try store.setColor(["a"], .blue)
+    #expect(try store.revert(pink).isEmpty)
+    try store.delete(["a"])
+    #expect(try store.revert(pink).isEmpty)
+}
+
 @Test func guardThrowsAt21PagesAndAllows20() throws {
     let store = try makeStore(tempFolder())
     #expect(throws: GuardError.needsConfirmation(pages: 21)) { try store.add(pageHighlights(21)) }

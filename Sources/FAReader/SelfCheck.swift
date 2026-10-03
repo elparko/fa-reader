@@ -429,6 +429,42 @@ final class SelfCheck {
                     await pause(0.3)
                     check("deleting a highlight closes its popover", opened && model.detailsAnchor == nil && model.selected == nil)
                 }
+                func exists(_ id: String) -> Bool { ((try? store.highlight(id: id)) ?? nil) != nil }
+                if let made {
+                    model.undo()
+                    let undone = exists(made.id)
+                    model.redo()
+                    let redone = !exists(made.id)
+                    model.undo()
+                    check("⌘Z brings back a deleted highlight and ⇧⌘Z deletes it again", undone && redone && exists(made.id))
+                }
+                if let made, let inner = select("centrilob", page: liver), let window = model.pdfView.window {
+                    model.select(nil)
+                    model.pdfView.setCurrentSelection(inner, animate: false)
+                    model.applyColor(.pink)
+                    let top = (try? store.highlights(page: liver))?.last { $0.text == "centrilob" }
+                    let b = model.pdfView.trimLine(inner.bounds(for: page), on: page)
+                    let spot = model.pdfView.convert(model.pdfView.convert(CGPoint(x: b.minX + 4, y: b.midY), from: page), to: nil)
+                    model.select(nil)
+                    drag([spot, spot])
+                    let first = model.selectedID
+                    drag([spot, spot])
+                    let second = model.selectedID
+                    check("clicking the same spot again steps down to the highlight underneath",
+                          top != nil && first == top?.id && second == made.id, "\(first ?? "nil") \(second ?? "nil")")
+                    model.pdfView.clearSelection()
+                    if let event = NSEvent.mouseEvent(with: .rightMouseDown, location: spot, modifierFlags: [], timestamp: 0,
+                                                      windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                        let items = model.pdfView.menu(for: event)?.items ?? []
+                        let deletes = items.filter { $0.title.hasPrefix("Delete “") }
+                        if let lower = deletes.first(where: { $0.title.contains("Yellow") }), let action = lower.action {
+                            NSApp.sendAction(action, to: lower.target, from: lower)
+                        }
+                        check("right-click on stacked highlights can delete the one underneath",
+                              deletes.count == 2 && !exists(made.id) && top.map { exists($0.id) } == true, items.map(\.title))
+                    }
+                    model.pdfView.clearSelection()
+                }
             }
             model.highlighterOn = true
             model.pdfView.window?.makeFirstResponder(model.pdfView)

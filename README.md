@@ -71,6 +71,8 @@ The toolbar, next to the zoom buttons, also has a highlighter button and four co
 - Click a highlight, then click a color: the highlight changes color.
 - Click a color with nothing selected: highlighter mode turns on with that color. Every selection you make is highlighted when you release the mouse, without the popup. Click the highlighter button or press Esc to turn it off.
 - Right-click selected text to highlight it, or right-click a highlight to change its color, edit its note or delete it.
+- Where highlights overlap, click the same spot again to select the one underneath. Right-click there to get a Delete item for each of them.
+- Cmd+Z undoes the last highlight change made since the app opened: a new highlight, a color change, a note or a delete. Cmd+Shift+Z redoes it. Older changes, including ones from other devices, are undone a whole session at a time from History (Cmd+Y). In a note or the search field, Cmd+Z undoes typing instead.
 
 ## Keyboard shortcuts
 
@@ -80,6 +82,7 @@ The toolbar, next to the zoom buttons, also has a highlighter button and four co
 | 1, 2, 3, 4 (color popup open) | Highlight the selected text yellow, green, pink, blue |
 | Esc (color popup open) | Close the popup |
 | Cmd+Delete | Delete the selected highlight |
+| Cmd+Z, Cmd+Shift+Z | Undo, redo the last highlight change |
 | Cmd+Shift+N | Edit the note of the selected highlight |
 | Cmd+Return | Save the note |
 | Cmd+F | Focus the search field |

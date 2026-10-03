@@ -90,6 +90,10 @@ struct AppCommands: Commands {
                 .keyboardShortcut("y")
                 .disabled(model.store == nil)
         }
+        CommandGroup(replacing: .undoRedo) {
+            Button("Undo") { model.undo() }.keyboardShortcut("z")
+            Button("Redo") { model.redo() }.keyboardShortcut("z", modifiers: [.command, .shift])
+        }
         CommandMenu("Highlight") {
             Button("Yellow") { model.applyColor(.yellow) }.keyboardShortcut("1")
             Button("Green") { model.applyColor(.green) }.keyboardShortcut("2")

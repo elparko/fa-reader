@@ -155,6 +155,8 @@ final class AppModel: ObservableObject {
 
     private var rendered: [Int: [Highlight]] = [:]
     private var renderedAnnotations: [Int: [PDFAnnotation]] = [:]
+    private var undoStack: [[PendingOp]] = []
+    private var redoStack: [[PendingOp]] = []
     private var previewRects: [Int: [CGRect]] = [:]
     private var outline: (page: PDFPage, annotation: PDFAnnotation)?
     private(set) var runner: SearchRunner?
@@ -183,6 +185,13 @@ final class AppModel: ObservableObject {
         pdfView.onColor = { [weak self] c in self?.applyColor(c) }
         pdfView.onEditNote = { [weak self] in self?.focusNote() }
         pdfView.onDelete = { [weak self] in self?.deleteSelected() }
+        pdfView.onDeleteID = { [weak self] id in self?.delete(id) }
+        pdfView.selectedHighlight = { [weak self] in self?.selectedID }
+        pdfView.describeHighlight = { [weak self] id in
+            guard let h = (try? self?.store?.highlight(id: id)) ?? nil else { return "Highlight" }
+            let text = h.text.count > 30 ? h.text.prefix(30) + "…" : h.text
+            return "“\(text)” (\(h.highlightColor.name.capitalized))"
+        }
         if let i = arguments.firstIndex(of: "--self-check"), i + 1 < arguments.count {
             selfCheck = SelfCheck(report: URL(fileURLWithPath: arguments[i + 1]))
         }
@@ -261,6 +270,8 @@ final class AppModel: ObservableObject {
         select(nil)
         clearRendered()
         store = newStore
+        undoStack = []
+        redoStack = []
         pdfURL = url
         document = doc
         pdfView.document = doc
@@ -739,12 +750,27 @@ final class AppModel: ObservableObject {
     }
 
     func deleteSelected() {
-        guard let id = selectedID, let store else { return }
+        if let id = selectedID { delete(id) }
+    }
+
+    func delete(_ id: String) {
+        guard let store else { return }
         commit { confirmed in try store.delete([id], confirmed: confirmed) }
     }
 
     @discardableResult
     func commit(_ body: (Bool) throws -> Void) -> Bool {
+        commit(recordUndo: true, body)
+    }
+
+    private func commit(recordUndo: Bool, _ body: (Bool) throws -> Void) -> Bool {
+        let before = store?.commitCount
+        defer {
+            if recordUndo, let store, store.commitCount != before, !store.lastCommitted.isEmpty {
+                undoStack.append(store.lastCommitted)
+                redoStack = []
+            }
+        }
         do {
             try body(false)
         } catch GuardError.needsConfirmation(let pages) {
@@ -758,6 +784,34 @@ final class AppModel: ObservableObject {
         refreshHistory()
         scheduleExport()
         return true
+    }
+
+    func undo() {
+        if NSApp.keyWindow?.firstResponder is NSText { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil); return }
+        step(from: &undoStack, to: &redoStack)
+    }
+
+    func redo() {
+        if NSApp.keyWindow?.firstResponder is NSText { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil); return }
+        step(from: &redoStack, to: &undoStack)
+    }
+
+    /// Reverts the newest change on one stack and pushes the reverting change onto the other.
+    /// A change that no longer applies, because its highlight changed in another way since, is dropped.
+    private func step(from source: inout [[PendingOp]], to target: inout [[PendingOp]]) {
+        flushNote()
+        guard let store else { return }
+        while let ops = source.popLast() {
+            guard let back = try? store.revert(ops), !back.isEmpty else { continue }
+            if commit(recordUndo: false, { confirmed in try store.commit(Plan(kind: .edit, label: "Edit", ops: back), confirmed: confirmed) }) {
+                target.append(back)
+                pdfView.clearSelection()
+            } else {
+                source.append(ops)
+            }
+            return
+        }
+        NSSound.beep()
     }
 
     func confirm(_ message: String, ok: String = "Continue") -> Bool {

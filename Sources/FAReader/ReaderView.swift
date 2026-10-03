@@ -10,6 +10,9 @@ final class HighlightPDFView: PDFView {
     var onColor: ((HighlightColor) -> Void)?
     var onEditNote: (() -> Void)?
     var onDelete: (() -> Void)?
+    var onDeleteID: ((String) -> Void)?
+    var selectedHighlight: () -> String? = { nil }
+    var describeHighlight: (String) -> String = { $0 }
     private var drawn = false
     private var selecting = false
     private var lineBoxes: [ObjectIdentifier: [CGRect]] = [:]
@@ -28,17 +31,32 @@ final class HighlightPDFView: PDFView {
         backgroundColor = .underPageBackgroundColor
     }
 
-    private func highlightHit(_ event: NSEvent) -> PDFAnnotation? {
+    /// Highlights under the mouse, topmost first.
+    private func highlightHits(_ event: NSEvent) -> [(id: String, note: Bool)] {
         let point = convert(event.locationInWindow, from: nil)
-        guard let page = page(for: point, nearest: false) else { return nil }
+        guard let page = page(for: point, nearest: false) else { return [] }
         let local = convert(point, to: page)
-        return page.annotations.last { $0.userName?.hasPrefix("fa:") == true && $0.bounds.contains(local) }
+        var seen = Set<String>()
+        return page.annotations.reversed().compactMap { a in
+            guard let name = a.userName, name.hasPrefix("fa:"), a.bounds.contains(local) else { return nil }
+            let id = String(name.dropFirst(3))
+            guard seen.insert(id).inserted else { return nil }
+            return (id, a.type?.hasSuffix("Text") == true)
+        }
+    }
+
+    /// The topmost highlight, or the one under the selected highlight when they overlap,
+    /// so clicking the same spot again steps down through stacked highlights.
+    private func highlightHit(_ event: NSEvent, stepDown: Bool) -> (id: String, note: Bool)? {
+        let hits = highlightHits(event)
+        guard let current = selectedHighlight(), let i = hits.firstIndex(where: { $0.id == current }) else { return hits.first }
+        return stepDown ? hits[(i + 1) % hits.count] : hits[i]
     }
 
     override func mouseDown(with event: NSEvent) {
-        if let hit = highlightHit(event), let name = hit.userName {
-            onHit?(String(name.dropFirst(3)))
-            if hit.type?.hasSuffix("Text") == true { return }
+        if let hit = highlightHit(event, stepDown: true) {
+            onHit?(hit.id)
+            if hit.note { return }
         } else {
             onHit?(nil)
         }
@@ -126,11 +144,15 @@ final class HighlightPDFView: PDFView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        let hasText = !(currentSelection?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let menu = super.menu(for: event) ?? NSMenu()
         var items: [NSMenuItem] = []
-        let hasText = !(currentSelection?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hit = hasText ? nil : highlightHit(event)
-        if let hit, let name = hit.userName { onHit?(String(name.dropFirst(3))) }
+        let hits = hasText ? [] : highlightHits(event)
+        let hit = hasText ? nil : highlightHit(event, stepDown: false)
+        if let hit {
+            clearSelection()
+            onHit?(hit.id)
+        }
         if hasText || hit != nil {
             for c in HighlightColor.highlightColors {
                 let item = NSMenuItem(title: (hasText ? "Highlight " : "Make ") + c.name.capitalized,
@@ -146,9 +168,19 @@ final class HighlightPDFView: PDFView {
             items.append(.separator())
             let note = NSMenuItem(title: "Edit Note", action: #selector(noteFromMenu), keyEquivalent: "")
             note.target = self
-            let delete = NSMenuItem(title: "Delete Highlight", action: #selector(deleteFromMenu), keyEquivalent: "")
-            delete.target = self
-            items += [note, delete]
+            items.append(note)
+            if hits.count > 1 {
+                for h in hits {
+                    let delete = NSMenuItem(title: "Delete \(describeHighlight(h.id))", action: #selector(deleteIDFromMenu(_:)), keyEquivalent: "")
+                    delete.representedObject = h.id
+                    delete.target = self
+                    items.append(delete)
+                }
+            } else {
+                let delete = NSMenuItem(title: "Delete Highlight", action: #selector(deleteFromMenu), keyEquivalent: "")
+                delete.target = self
+                items.append(delete)
+            }
         }
         guard !items.isEmpty else { return menu }
         items.append(.separator())
@@ -171,6 +203,9 @@ final class HighlightPDFView: PDFView {
 
     @objc private func noteFromMenu() { onEditNote?() }
     @objc private func deleteFromMenu() { onDelete?() }
+    @objc private func deleteIDFromMenu(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String { onDeleteID?(id) }
+    }
 
     override func draw(_ page: PDFPage, to context: CGContext) {
         super.draw(page, to: context)
