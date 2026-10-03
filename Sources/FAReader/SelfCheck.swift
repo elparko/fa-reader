@@ -399,6 +399,37 @@ final class SelfCheck {
                 model.hideColorPopup()
                 model.pdfView.clearSelection()
             }
+            let liver = 394
+            if let sel = select("(centrilobular) zone", page: liver), let page = document.page(at: liver),
+               let below = select("Affected 1st by ischemia", page: liver)?.bounds(for: page) {
+                let tall = sel.bounds(for: page)
+                model.pdfView.go(to: sel)
+                await pause(0.3)
+                let row = model.pdfView.trimLine(tall, on: page)
+                let points = (0...10).map { i -> NSPoint in
+                    let p = CGPoint(x: tall.minX + 2 + CGFloat(i) * (tall.width - 4) / 10, y: row.midY - CGFloat(i) * 0.4)
+                    return model.pdfView.convert(model.pdfView.convert(p, from: page), to: nil)
+                }
+                drag(points)
+                await pause(0.4)
+                let dragged = model.pdfView.currentSelection?.selectionsByLine().compactMap(\.string) ?? []
+                check("a drag on a line with an oversized box stays on that row", dragged.count == 1 && dragged.first?.contains("centrilob") == true, dragged)
+                model.hideColorPopup()
+                model.pdfView.setCurrentSelection(sel, animate: false)
+                model.applyColor(.yellow)
+                let made = (try? store.highlights(page: liver))?.first { $0.text.contains("centrilobular") }
+                let r = made?.rects.first
+                check("a highlight on a line with an oversized box covers one row",
+                      tall.height > 20 && r.map { $0.h < 15 && $0.y >= below.maxY - 0.5 } == true, "box \(tall) stored \(r.map { "\($0)" } ?? "none")")
+                model.pdfView.clearSelection()
+                if let made {
+                    model.select(made.id)
+                    let opened = model.detailsAnchor != nil
+                    model.deleteSelected()
+                    await pause(0.3)
+                    check("deleting a highlight closes its popover", opened && model.detailsAnchor == nil && model.selected == nil)
+                }
+            }
             model.highlighterOn = true
             model.pdfView.window?.makeFirstResponder(model.pdfView)
             if let window = model.pdfView.window, let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,

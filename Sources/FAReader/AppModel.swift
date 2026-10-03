@@ -596,6 +596,7 @@ final class AppModel: ObservableObject {
             selectedID = nil
             selected = nil
             noteDraft = ""
+            hideDetails()
             updateOutline()
             return
         }
@@ -713,8 +714,9 @@ final class AppModel: ObservableObject {
         var texts: [Int: [String]] = [:]
         for line in selection.selectionsByLine() {
             for page in line.pages {
-                let b = line.bounds(for: page)
-                guard b.width >= 1, b.height >= 1 else { continue }
+                let raw = line.bounds(for: page)
+                guard raw.width >= 1, raw.height >= 1 else { continue }
+                let b = pdfView.trimLine(raw, on: page)
                 let index = document.index(for: page)
                 rects[index, default: []].append(Rect(x: b.minX, y: b.minY, w: b.width, h: b.height))
                 if let s = line.string { texts[index, default: []].append(s) }

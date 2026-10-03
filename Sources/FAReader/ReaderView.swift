@@ -12,6 +12,11 @@ final class HighlightPDFView: PDFView {
     var onDelete: (() -> Void)?
     private var drawn = false
     private var selecting = false
+    private var lineBoxes: [ObjectIdentifier: [CGRect]] = [:]
+
+    override var document: PDFDocument? {
+        didSet { lineBoxes = [:] }
+    }
 
     func configure() {
         displayMode = .singlePageContinuous
@@ -63,9 +68,37 @@ final class HighlightPDFView: PDFView {
         let point = convert(event.locationInWindow, from: nil)
         guard let page = page(for: point, nearest: false) else { return nil }
         let local = convert(point, to: page)
-        guard let line = page.selectionForLine(at: local)?.bounds(for: page), line.height > 0,
-              line.insetBy(dx: -2, dy: 0).contains(local) else { return nil }
+        guard let line = lines(on: page).first(where: { $0.insetBy(dx: -2, dy: 0).contains(local) }) else { return nil }
         return (page, local.x, line)
+    }
+
+    /// Boxes of the text lines on a page, trimmed with `trimLine`.
+    func lines(on page: PDFPage) -> [CGRect] {
+        let raw = rawLines(on: page)
+        return raw.map { Self.trimLine($0, among: raw) }
+    }
+
+    func trimLine(_ box: CGRect, on page: PDFPage) -> CGRect {
+        Self.trimLine(box, among: rawLines(on: page))
+    }
+
+    private func rawLines(on page: PDFPage) -> [CGRect] {
+        if let cached = lineBoxes[ObjectIdentifier(page)] { return cached }
+        let raw = page.selection(for: page.bounds(for: .mediaBox))?.selectionsByLine().map { $0.bounds(for: page) }
+            .filter { $0.width >= 1 && $0.height >= 1 } ?? []
+        lineBoxes[ObjectIdentifier(page)] = raw
+        return raw
+    }
+
+    /// Some lines in First Aid report a box about twice their real height, hanging over the row below.
+    /// Cuts such a box where it overlaps a normal-height line in the same column.
+    static func trimLine(_ box: CGRect, among lines: [CGRect]) -> CGRect {
+        var r = box
+        for o in lines where o != box && box.height > o.height * 1.5 && o.maxX > box.minX && o.minX < box.maxX {
+            guard o.maxY > r.minY, o.minY < r.maxY else { continue }
+            if o.midY < r.midY { r.origin.y = o.maxY; r.size.height = box.maxY - o.maxY } else { r.size.height = o.minY - r.minY }
+        }
+        return r.height >= box.height * 0.3 ? r : box
     }
 
     /// Text lines in the PDF overlap, so PDFKit's own drag picks up the next line as soon as the mouse drifts a little low.

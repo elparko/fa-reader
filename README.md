@@ -63,7 +63,7 @@ Each section file has an automatic highlights block between `<!-- fa-reader:high
 
 Select text and a bar of four color dots pops up above it. Click a color, or press 1 to 4 (yellow, green, pink, blue), and the text is highlighted. Esc or clicking elsewhere closes the bar and leaves the text selected. The bar follows the text when you scroll or zoom.
 
-A drag stays on the line where it started until the mouse moves most of a line height up or down. The text lines in the PDF overlap, so without this a slightly low drag would also select the next line.
+A drag stays on the line where it started until the mouse moves most of a line height up or down. About 4% of the text lines in First Aid report a box twice their real height that hangs over the row below. The app cuts those boxes back to their own row, both for the drag and for the saved highlight, so a highlight covers one row. Highlights made before this change keep their old boxes.
 
 The toolbar, next to the zoom buttons, also has a highlighter button and four color dots.
 
