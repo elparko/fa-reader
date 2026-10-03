@@ -221,6 +221,23 @@ public final class Store {
         return out
     }
 
+    /// This device's most recent commits, oldest first, each as the ops it made. Ops from one commit
+    /// share a session and sit microseconds apart; separate commits are at least a millisecond apart.
+    public func recentChanges(limit: Int = 50) throws -> [[PendingOp]] {
+        let ops = try db.query("SELECT body FROM ops WHERE device=? ORDER BY seq DESC LIMIT 5000", device)
+            .compactMap { try? decoder.decode(Op.self, from: Data($0.string("body").utf8)) }
+            .reversed()
+        var groups: [[Op]] = []
+        for op in ops {
+            if let last = groups.last?.last, last.session == op.session, op.ts - last.ts < 0.0005 {
+                groups[groups.count - 1].append(op)
+            } else {
+                groups.append([op])
+            }
+        }
+        return groups.suffix(limit).map { $0.map { PendingOp($0) } }
+    }
+
     // MARK: History and undo
 
     public func sessions() throws -> [SessionSummary] {

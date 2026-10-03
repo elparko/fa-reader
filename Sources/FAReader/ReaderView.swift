@@ -11,14 +11,23 @@ final class HighlightPDFView: PDFView {
     var onEditNote: (() -> Void)?
     var onDelete: (() -> Void)?
     var onDeleteID: ((String) -> Void)?
+    var onErase: (() -> Void)?
+    var onCopyHighlight: (() -> Bool)?
     var selectedHighlight: () -> String? = { nil }
+    var selectionTouchesHighlights: () -> Bool = { false }
     var describeHighlight: (String) -> String = { $0 }
     private var drawn = false
     private var selecting = false
     private var lineBoxes: [ObjectIdentifier: [CGRect]] = [:]
+    private var charBoxes: [ObjectIdentifier: [CGRect]] = [:]
+    private var pageTexts: [ObjectIdentifier: PageText] = [:]
 
     override var document: PDFDocument? {
-        didSet { lineBoxes = [:] }
+        didSet {
+            lineBoxes = [:]
+            charBoxes = [:]
+            pageTexts = [:]
+        }
     }
 
     func configure() {
@@ -110,13 +119,122 @@ final class HighlightPDFView: PDFView {
 
     /// Some lines in First Aid report a box about twice their real height, hanging over the row below.
     /// Cuts such a box where it overlaps a normal-height line in the same column.
+    /// Neighboring rows also overlap by about a point; those boxes are cut halfway through the overlap,
+    /// so highlights on adjacent rows do not draw a darker stripe where they meet.
     static func trimLine(_ box: CGRect, among lines: [CGRect]) -> CGRect {
         var r = box
         for o in lines where o != box && box.height > o.height * 1.5 && o.maxX > box.minX && o.minX < box.maxX {
             guard o.maxY > r.minY, o.minY < r.maxY else { continue }
             if o.midY < r.midY { r.origin.y = o.maxY; r.size.height = box.maxY - o.maxY } else { r.size.height = o.minY - r.minY }
         }
-        return r.height >= box.height * 0.3 ? r : box
+        if r.height < box.height * 0.3 { r = box }
+        let trimmed = r
+        for o in lines where o != box && o.maxX > trimmed.minX && o.minX < trimmed.maxX {
+            let overlap = min(trimmed.maxY, o.maxY) - max(trimmed.minY, o.minY)
+            guard overlap > 0, overlap < min(trimmed.height, o.height) * 0.3 else { continue }
+            if o.midY < trimmed.midY {
+                let cut = trimmed.minY + overlap / 2
+                if cut > r.minY { r.size.height = r.maxY - cut; r.origin.y = cut }
+            } else {
+                let cut = trimmed.maxY - overlap / 2
+                if cut < r.maxY { r.size.height = cut - r.minY }
+            }
+        }
+        return r
+    }
+
+    func pageText(_ page: PDFPage) -> PageText {
+        if let cached = pageTexts[ObjectIdentifier(page)] { return cached }
+        let text = PageText(page.string ?? "")
+        pageTexts[ObjectIdentifier(page)] = text
+        return text
+    }
+
+    /// Boxes of each character on a page, indexed like selections. They come from one-character selections,
+    /// because `characterBounds(at:)` counts characters differently from selections in some PDFs, First Aid among them.
+    /// The last character of a line reports the whole line's box; it is moved to just after the character before it.
+    func charBoxes(_ page: PDFPage) -> [CGRect] {
+        if let cached = charBoxes[ObjectIdentifier(page)] { return cached }
+        let text = pageText(page)
+        var boxes = (0..<text.count).map { page.selection(for: NSRange(location: $0, length: 1))?.bounds(for: page) ?? .zero }
+        for i in boxes.indices {
+            if text.isSpace(i) { boxes[i] = .zero; continue }
+            guard i > 0 else { continue }
+            let prev = boxes[i - 1], box = boxes[i]
+            if prev.width > 0, box.minX < prev.maxX - 1, box.width > prev.width * 1.5, prev.maxY > box.minY, prev.minY < box.maxY {
+                boxes[i] = CGRect(x: prev.maxX, y: box.minY, width: min(prev.width, 5), height: box.height)
+            }
+        }
+        charBoxes[ObjectIdentifier(page)] = boxes
+        return boxes
+    }
+
+    /// The characters a stored highlight covers: those whose box has its upper middle in one of the highlight's boxes,
+    /// after cutting oversized boxes back to their own row. The upper middle, because an oversized box hangs below its row.
+    func chars(in rects: [Rect], on page: PDFPage) -> IndexSet {
+        let boxes = charBoxes(page)
+        let areas = rects.map { trimLine(CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h), on: page).insetBy(dx: -0.5, dy: -0.5) }
+        var out = IndexSet()
+        for (i, b) in boxes.enumerated() where b.width > 0 && b.height > 0 {
+            let p = CGPoint(x: b.midX, y: b.maxY - min(b.height / 2, 6))
+            if areas.contains(where: { $0.contains(p) }) { out.insert(i) }
+        }
+        return out
+    }
+
+    /// One box per text line of a character range, spanning the line's own characters, with its text.
+    func lineBoxes(for range: Range<Int>, on page: PDFPage) -> [(rect: CGRect, text: String)] {
+        guard let selection = page.selection(for: NSRange(location: range.lowerBound, length: range.count)) else { return [] }
+        let boxes = charBoxes(page)
+        return selection.selectionsByLine().compactMap { line in
+            let raw = line.bounds(for: page)
+            guard raw.width >= 1, raw.height >= 1 else { return nil }
+            var r = trimLine(raw, on: page)
+            let span = chars(of: line, on: page).reduce(CGRect.null) { boxes.indices.contains($1) && boxes[$1].width > 0 ? $0.union(boxes[$1]) : $0 }
+            if !span.isNull {
+                r.origin.x = span.minX
+                r.size.width = span.width
+            }
+            return (r, line.string ?? "")
+        }
+    }
+
+    /// The characters a selection covers on a page.
+    func chars(of selection: PDFSelection, on page: PDFPage) -> IndexSet {
+        var out = IndexSet()
+        for i in 0..<selection.numberOfTextRanges(on: page) {
+            let r = selection.range(at: i, on: page)
+            if r.location != NSNotFound, r.length > 0 { out.insert(integersIn: r.location..<(r.location + r.length)) }
+        }
+        return out
+    }
+
+    /// The selection widened to whole words, with whitespace at either end left out.
+    /// Holding Option keeps the selection as dragged.
+    func snapped(_ selection: PDFSelection) -> PDFSelection {
+        guard !NSEvent.modifierFlags.contains(.option), let document, let first = selection.pages.first,
+              let last = selection.pages.last else { return selection }
+        if first == last {
+            let chars = chars(of: selection, on: first)
+            let text = pageText(first)
+            let snapped = text.snap(chars)
+            guard !chars.isEmpty, snapped != chars, !snapped.isEmpty else { return selection }
+            let out = PDFSelection(document: document)
+            for r in text.runs(snapped) {
+                if let part = first.selection(for: NSRange(location: r.lowerBound, length: r.count)) { out.add(part) }
+            }
+            return out.pages.isEmpty ? selection : out
+        }
+        guard let out = selection.copy() as? PDFSelection else { return selection }
+        let head = chars(of: selection, on: first), tail = chars(of: selection, on: last)
+        if let start = head.first, let end = tail.last {
+            let a = pageText(first), b = pageText(last)
+            let before = start - a.snap(start..<(start + 1)).lowerBound
+            let after = b.snap(end..<(end + 1)).upperBound - (end + 1)
+            if before > 0 { out.extend(atStart: before) }
+            if after > 0 { out.extend(atEnd: after) }
+        }
+        return out
     }
 
     /// Text lines in the PDF overlap, so PDFKit's own drag picks up the next line as soon as the mouse drifts a little low.
@@ -131,7 +249,8 @@ final class HighlightPDFView: PDFView {
                 var local = convert(point, to: page)
                 if page == start.page, abs(local.y - start.line.midY) < start.line.height * 0.75 { local.y = start.line.midY }
                 let from = CGPoint(x: start.x, y: start.line.midY)
-                setCurrentSelection(document.selection(from: start.page, at: from, to: page, at: local), animate: false)
+                let raw = document.selection(from: start.page, at: from, to: page, at: local)
+                setCurrentSelection(raw.map(snapped), animate: false)
             }
             if event.type == .leftMouseUp { break }
         }
@@ -164,11 +283,21 @@ final class HighlightPDFView: PDFView {
                 items.append(item)
             }
         }
+        if hasText, selectionTouchesHighlights() {
+            items.append(.separator())
+            let erase = NSMenuItem(title: "Remove Highlight", action: #selector(eraseFromMenu), keyEquivalent: "")
+            erase.target = self
+            erase.image = NSImage(systemSymbolName: "eraser", accessibilityDescription: nil)
+            items.append(erase)
+        }
         if hit != nil {
             items.append(.separator())
             let note = NSMenuItem(title: "Edit Note", action: #selector(noteFromMenu), keyEquivalent: "")
             note.target = self
             items.append(note)
+            let copy = NSMenuItem(title: "Copy Text", action: #selector(copyFromMenu), keyEquivalent: "")
+            copy.target = self
+            items.append(copy)
             if hits.count > 1 {
                 for h in hits {
                     let delete = NSMenuItem(title: "Delete \(describeHighlight(h.id))", action: #selector(deleteIDFromMenu(_:)), keyEquivalent: "")
@@ -202,6 +331,13 @@ final class HighlightPDFView: PDFView {
     }
 
     @objc private func noteFromMenu() { onEditNote?() }
+    @objc private func eraseFromMenu() { onErase?() }
+    @objc private func copyFromMenu() { _ = onCopyHighlight?() }
+
+    override func copy(_ sender: Any?) {
+        if (currentSelection?.string ?? "").isEmpty, onCopyHighlight?() == true { return }
+        super.copy(sender)
+    }
     @objc private func deleteFromMenu() { onDelete?() }
     @objc private func deleteIDFromMenu(_ sender: NSMenuItem) {
         if let id = sender.representedObject as? String { onDeleteID?(id) }
@@ -236,7 +372,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: visibility) {
             SidebarView(model: model)
-                .navigationSplitViewColumnWidth(min: 110, ideal: model.pagesOnly ? 150 : 290, max: 420)
+                .navigationSplitViewColumnWidth(min: 110, ideal: model.pagesOnly ? 150 : model.sidebarMode == .highlights ? 320 : 290, max: 480)
         } detail: {
             HSplitView {
             ReaderView(model: model)
@@ -250,6 +386,7 @@ struct ContentView: View {
                             .padding(10)
                     }
                 }
+                .overlay(alignment: .bottom) { UndoNotice(model: model) }
                 .overlay {
                     if model.document == nil {
                         VStack(spacing: 12) {
@@ -289,6 +426,10 @@ struct ContentView: View {
                             Button { model.zoomIn() } label: { Image(systemName: "plus.magnifyingglass") }
                                 .help("Zoom in (Cmd+=)")
                         }
+                        Button { model.showHighlightList() } label: {
+                            Label("Highlights", systemImage: "list.bullet.rectangle")
+                        }
+                        .help("List highlights by color, section and page (⇧⌘H)")
                         Toggle(isOn: $model.notesShown) { Label("Notes", systemImage: "note.text") }
                             .toggleStyle(.button)
                             .help("Show the markdown notes for this section (Cmd+Option+N)")
@@ -312,52 +453,143 @@ struct ContentView: View {
     }
 }
 
-/// The bar of color dots that pops up over selected text.
-struct ColorPopup: View {
-    static let dot: CGFloat = 26
-    static let gap: CGFloat = 4
+enum BarItem: Hashable {
+    case color(HighlightColor), divider, erase, note, copy, delete
+
+    var width: CGFloat { self == .divider ? 9 : 28 }
+}
+
+/// The bar that pops up over selected text (colors, and an eraser when the text is already highlighted)
+/// or over a clicked highlight (colors, note, copy, delete).
+struct HighlightBar: View {
+    static let padding: CGFloat = 5
+    static let height: CGFloat = 36
+
+    @ObservedObject var model: AppModel
+
+    static func size(_ items: [BarItem]) -> CGSize {
+        CGSize(width: padding * 2 + items.reduce(0) { $0 + $1.width }, height: height)
+    }
+
+    /// The item under `x`, measured from the bar's left edge.
+    static func item(at x: CGFloat, in items: [BarItem]) -> BarItem? {
+        var left = padding
+        for item in items {
+            if x >= left, x < left + item.width { return item == .divider ? nil : item }
+            left += item.width
+        }
+        return nil
+    }
+
+    /// The center of `item`, measured from the bar's left edge.
+    static func center(of item: BarItem, in items: [BarItem]) -> CGFloat? {
+        var left = padding
+        for i in items {
+            if i == item { return left + i.width / 2 }
+            left += i.width
+        }
+        return nil
+    }
 
     var body: some View {
-        HStack(spacing: Self.gap) {
-            ForEach(HighlightColor.highlightColors, id: \.self) { ColorPopupDot(color: $0) }
+        let items = model.barItems
+        let size = Self.size(items)
+        HStack(spacing: 0) {
+            ForEach(items, id: \.self) { item in
+                BarCell(item: item, model: model).frame(width: item.width, height: Self.height)
+            }
         }
-        .frame(width: AppModel.colorPopupSize.width, height: AppModel.colorPopupSize.height)
+        .padding(.horizontal, Self.padding)
+        .frame(width: size.width, height: size.height)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12)))
     }
 }
 
-/// Hosts the color popup as an AppKit subview of the PDF view and handles its clicks itself,
+private struct BarCell: View {
+    let item: BarItem
+    @ObservedObject var model: AppModel
+    @State private var hovering = false
+
+    var body: some View {
+        Group {
+            switch item {
+            case .color(let c):
+                ZStack {
+                    Circle()
+                        .fill(swatch(c))
+                        .overlay(Circle().strokeBorder(Color.primary.opacity(0.15)))
+                        .frame(width: 20, height: 20)
+                    if model.barMode == .highlight, model.selected?.highlightColor == c {
+                        Circle().strokeBorder(Color.primary.opacity(0.7), lineWidth: 2).frame(width: 26, height: 26)
+                    }
+                }
+                .scaleEffect(hovering ? 1.15 : 1)
+                .help("\(c.name.capitalized) (\(c.rawValue))")
+            case .divider:
+                Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1, height: 20)
+            case .erase:
+                icon("eraser").help("Remove highlighting from the selected text (Delete)")
+            case .note:
+                icon(model.selected?.note.isEmpty == false ? "note.text" : "square.and.pencil")
+                    .foregroundStyle(model.selected?.note.isEmpty == false ? Color.accentColor : Color.primary)
+                    .help(model.selected?.note.isEmpty == false ? "Edit note (N): \(model.selected?.note.prefix(80) ?? "")" : "Add a note (N)")
+            case .copy:
+                icon("doc.on.doc").help("Copy the highlighted text (⌘C)")
+            case .delete:
+                icon("trash").help("Delete this highlight (Delete)")
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.1), value: hovering)
+    }
+
+    private func icon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 14, weight: .medium))
+            .frame(width: 24, height: 24)
+            .background(hovering ? Color.primary.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+/// Hosts the bar as an AppKit subview of the PDF view and handles its clicks itself,
 /// so a click works even when the window is not yet active.
-final class ColorPopupHost: NSHostingView<ColorPopup> {
-    var pick: ((HighlightColor) -> Void)?
+final class HighlightBarHost: NSHostingView<HighlightBar> {
+    var pick: ((BarItem) -> Void)?
+    var items: () -> [BarItem] = { [] }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        let colors = HighlightColor.highlightColors
         let x = convert(event.locationInWindow, from: nil).x
-        let left = (bounds.width - CGFloat(colors.count) * ColorPopup.dot - CGFloat(colors.count - 1) * ColorPopup.gap) / 2
-        let i = Int(((x - left + ColorPopup.gap / 2) / (ColorPopup.dot + ColorPopup.gap)).rounded(.down))
-        if colors.indices.contains(i) { pick?(colors[i]) }
+        if let item = HighlightBar.item(at: x, in: items()) { pick?(item) }
     }
 }
 
-private struct ColorPopupDot: View {
-    let color: HighlightColor
-    @State private var hovering = false
+/// A short message at the bottom of the page after a change that removed highlighting, with an Undo button.
+struct UndoNotice: View {
+    @ObservedObject var model: AppModel
 
     var body: some View {
-        Circle()
-            .fill(swatch(color))
-            .overlay(Circle().strokeBorder(Color.primary.opacity(0.15)))
-            .frame(width: 20, height: 20)
-            .scaleEffect(hovering ? 1.2 : 1)
-            .frame(width: ColorPopup.dot, height: ColorPopup.dot)
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.1), value: hovering)
-            .help("\(color.name.capitalized) (\(color.rawValue))")
+        if let notice = model.notice {
+            HStack(spacing: 12) {
+                Text(notice.message).lineLimit(1)
+                Button("Undo") { model.undo() }
+                    .buttonStyle(.borderless)
+                    .fontWeight(.semibold)
+                    .help("Undo (⌘Z)")
+            }
+            .font(.callout)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12)))
+            .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
+            .padding(.bottom, 16)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .id(notice.id)
+        }
     }
 }
 

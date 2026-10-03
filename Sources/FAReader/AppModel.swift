@@ -54,6 +54,19 @@ final class SearchRunner: @unchecked Sendable {
     }
 }
 
+enum BarMode: Equatable {
+    case selection(erase: Bool), highlight
+}
+
+struct Notice: Equatable {
+    var message: String
+    var id = UUID()
+}
+
+enum SidebarMode: Int {
+    case chapters, pages, highlights
+}
+
 struct PendingUndo: Equatable {
     var sessionID: String
     var revert: Int
@@ -119,9 +132,13 @@ final class AppModel: ObservableObject {
     private var popover: NSPopover?
     private var scrollObserver: Any?
     private var ignoreScrollUntil = Date.distantPast
-    @Published var pagesOnly = UserDefaults.standard.bool(forKey: "pagesOnly") {
-        didSet { if !isTestRun { UserDefaults.standard.set(pagesOnly, forKey: "pagesOnly") } }
+    @Published var sidebarMode = SidebarMode(rawValue: UserDefaults.standard.integer(forKey: "sidebarMode")) ?? .chapters {
+        didSet { if !isTestRun { UserDefaults.standard.set(sidebarMode.rawValue, forKey: "sidebarMode") } }
     }
+    var pagesOnly: Bool { sidebarMode == .pages }
+    let browser = HighlightBrowser()
+    @Published private(set) var allHighlights: [Highlight] = []
+    @Published private(set) var notice: Notice?
     @Published var colorFilter: HighlightColor? { didSet { runSearch() } }
     @Published var sectionFilter: Int? { didSet { runSearch() } }
     @Published var tagFilter: String? { didSet { runSearch() } }
@@ -132,12 +149,15 @@ final class AppModel: ObservableObject {
     @Published var penColor = HighlightColor(rawValue: UserDefaults.standard.integer(forKey: "penColor")).flatMap { $0 == .noteOnly ? nil : $0 } ?? .yellow {
         didSet { if !isTestRun { UserDefaults.standard.set(penColor.rawValue, forKey: "penColor") } }
     }
-    /// Center of the color popup over the selected text, in the PDF view with the origin at the top left. Nil when hidden.
+    /// What the bar over the selected text or the selected highlight shows. Nil when there is no bar.
+    @Published private(set) var barMode: BarMode?
+    /// Center of the bar, in the PDF view with the origin at the top left. Nil when hidden or scrolled out of view.
     private(set) var colorPopupAt: CGPoint? { didSet { moveColorPopupView() } }
     private(set) lazy var colorPopupView: NSView = {
-        let host = ColorPopupHost(rootView: ColorPopup())
-        host.pick = { [weak self] in self?.pickColor($0) }
-        host.frame.size = Self.colorPopupSize
+        let host = HighlightBarHost(rootView: HighlightBar(model: self))
+        host.pick = { [weak self] in self?.barAction($0) }
+        host.items = { [weak self] in self?.barItems ?? [] }
+        host.frame.size = barSize
         host.wantsLayer = true
         let shadow = NSShadow()
         shadow.shadowColor = .black.withAlphaComponent(0.2)
@@ -146,7 +166,16 @@ final class AppModel: ObservableObject {
         host.shadow = shadow
         return host
     }()
-    static let colorPopupSize = CGSize(width: 136, height: 36)
+    var barSize: CGSize { HighlightBar.size(barItems) }
+
+    var barItems: [BarItem] {
+        let colors = HighlightColor.highlightColors.map(BarItem.color)
+        switch barMode {
+        case .selection(let erase): return colors + (erase ? [.divider, .erase] : [])
+        case .highlight: return colors + [.divider, .note, .copy, .delete]
+        case nil: return colors
+        }
+    }
     @Published var recentBooks: [String] = UserDefaults.standard.stringArray(forKey: "recentPDFs") ?? []
     @Published var selectedResultID: String?
     private(set) var thumbnailer: Thumbnailer?
@@ -155,8 +184,9 @@ final class AppModel: ObservableObject {
 
     private var rendered: [Int: [Highlight]] = [:]
     private var renderedAnnotations: [Int: [PDFAnnotation]] = [:]
-    private var undoStack: [[PendingOp]] = []
-    private var redoStack: [[PendingOp]] = []
+    @Published private var undoStack: [[PendingOp]] = []
+    @Published private var redoStack: [[PendingOp]] = []
+    private var noticeWork: DispatchWorkItem?
     private var previewRects: [Int: [CGRect]] = [:]
     private var outline: (page: PDFPage, annotation: PDFAnnotation)?
     private(set) var runner: SearchRunner?
@@ -178,7 +208,6 @@ final class AppModel: ObservableObject {
         installKeyMonitor()
         pdfView.onHit = { [weak self] id in
             self?.showResultsPanel = false
-            self?.hideColorPopup()
             self?.select(id)
         }
         pdfView.onSelectionEnded = { [weak self] in self?.selectionEnded() }
@@ -186,7 +215,10 @@ final class AppModel: ObservableObject {
         pdfView.onEditNote = { [weak self] in self?.focusNote() }
         pdfView.onDelete = { [weak self] in self?.deleteSelected() }
         pdfView.onDeleteID = { [weak self] id in self?.delete(id) }
+        pdfView.onErase = { [weak self] in self?.eraseSelection() }
+        pdfView.onCopyHighlight = { [weak self] in self?.copySelectedHighlight() ?? false }
         pdfView.selectedHighlight = { [weak self] in self?.selectedID }
+        pdfView.selectionTouchesHighlights = { [weak self] in self?.selectionTouchesHighlights() ?? false }
         pdfView.describeHighlight = { [weak self] id in
             guard let h = (try? self?.store?.highlight(id: id)) ?? nil else { return "Highlight" }
             let text = h.text.count > 30 ? h.text.prefix(30) + "…" : h.text
@@ -205,7 +237,7 @@ final class AppModel: ObservableObject {
         center.addObserver(forName: .PDFViewSelectionChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.flushNote()
-                if self?.hasTextSelection == false { self?.hideColorPopup() }
+                if self?.hasTextSelection == false, case .selection = self?.barMode { self?.hideColorPopup() }
             }
         }
         center.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
@@ -270,8 +302,9 @@ final class AppModel: ObservableObject {
         select(nil)
         clearRendered()
         store = newStore
-        undoStack = []
+        undoStack = (try? newStore.recentChanges()) ?? []
         redoStack = []
+        notice = nil
         pdfURL = url
         document = doc
         pdfView.document = doc
@@ -433,23 +466,21 @@ final class AppModel: ObservableObject {
     }
 
     func goToEntered() {
-        let text = goToText.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { return }
+        guard !goToText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        if let page = pageIndex(for: goToText) { goTo(page: page) } else { beep() }
+    }
+
+    /// A PDF page index from a printed book page (`346`) or a PDF page (`pdf 367`).
+    func pageIndex(for entered: String) -> Int? {
+        let text = entered.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return nil }
         if text.lowercased().hasPrefix("pdf") {
-            if let n = Int(text.dropFirst(3).trimmingCharacters(in: .whitespaces)), (1...max(1, pageCount)).contains(n) {
-                goTo(page: n - 1)
-            } else {
-                NSSound.beep()
-            }
-            return
+            guard let n = Int(text.dropFirst(3).trimmingCharacters(in: .whitespaces)), (1...max(1, pageCount)).contains(n) else { return nil }
+            return n - 1
         }
-        if let store, let page = (try? BookIndex.pdfPage(forPrinted: text, db: store.db)) ?? nil {
-            goTo(page: page)
-        } else if let n = Int(text), (1...max(1, pageCount)).contains(n) {
-            goTo(page: n - 1)
-        } else {
-            NSSound.beep()
-        }
+        if let store, let page = (try? BookIndex.pdfPage(forPrinted: text, db: store.db)) ?? nil { return page }
+        if let n = Int(text), (1...max(1, pageCount)).contains(n) { return n - 1 }
+        return nil
     }
 
     // MARK: Zoom
@@ -504,6 +535,7 @@ final class AppModel: ObservableObject {
     func reconcile() {
         guard let store else { return }
         let all = (try? store.highlights()) ?? []
+        if allHighlights != all { allHighlights = all }
         let byPage = Dictionary(grouping: all, by: \.page)
         for page in Set(rendered.keys).union(byPage.keys) {
             let new = byPage[page] ?? []
@@ -547,23 +579,31 @@ final class AppModel: ObservableObject {
     // MARK: Selection and editing
 
     func select(_ id: String?) {
-        if id == selectedID { return }
-        if id != nil { hideColorPopup() }
+        if id == selectedID {
+            if id != nil, barMode != .highlight { showHighlightBar() }
+            return
+        }
         flushNote()
+        hideDetails()
         selectedID = id
         selected = id.flatMap { try? store?.highlight(id: $0) } ?? nil
         if selected == nil { selectedID = nil }
         noteDraft = selected?.note ?? ""
         updateOutline()
-        if selected == nil { hideDetails() } else { showDetails() }
+        if selected != nil {
+            showHighlightBar()
+            if selected?.note.isEmpty == false { showDetails() }
+        } else if barMode == .highlight {
+            hideColorPopup()
+        }
     }
 
+    /// Opens the note popover under the selected highlight.
     func showDetails() {
         popover?.close()
         popover = nil
         guard let h = selected, let page = document?.page(at: h.page), !h.rects.isEmpty, pdfView.window != nil else { return }
-        let union = h.rects.map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }.reduce(CGRect.null) { $0.union($1) }
-        let rect = pdfView.convert(union, from: page)
+        let rect = pdfView.convert(union(h.rects), from: page)
         guard rect.intersects(pdfView.bounds) else { return }
         if isTestRun {
             detailsAnchor = rect
@@ -573,7 +613,7 @@ final class AppModel: ObservableObject {
         p.behavior = .applicationDefined
         p.animates = false
         p.contentViewController = NSHostingController(rootView: InspectorView(model: self).frame(width: 280))
-        p.show(relativeTo: rect.intersection(pdfView.bounds), of: pdfView, preferredEdge: .maxY)
+        p.show(relativeTo: rect.intersection(pdfView.bounds), of: pdfView, preferredEdge: pdfView.isFlipped ? .maxY : .minY)
         popover = p
         ignoreScrollUntil = Date().addingTimeInterval(0.4)
     }
@@ -588,6 +628,10 @@ final class AppModel: ObservableObject {
 
     var detailsShown: Bool { popover?.isShown ?? false }
     private(set) var detailsAnchor: CGRect?
+
+    private func union(_ rects: [Rect]) -> CGRect {
+        rects.map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }.reduce(CGRect.null) { $0.union($1) }
+    }
 
     private func watchScrolling() {
         guard let clip = pdfView.documentView?.enclosingScrollView?.contentView, scrollObserver == nil else { return }
@@ -609,12 +653,14 @@ final class AppModel: ObservableObject {
             noteDraft = ""
             hideDetails()
             updateOutline()
+            if barMode == .highlight { hideColorPopup() }
             return
         }
         if noteDraft == selected?.note { noteDraft = fresh.note }
         if selected != fresh {
             selected = fresh
             updateOutline()
+            placeColorPopup()
         }
     }
 
@@ -625,8 +671,7 @@ final class AppModel: ObservableObject {
             outline = nil
         }
         guard let h = selected, let page = document?.page(at: h.page), !h.rects.isEmpty else { return }
-        let union = h.rects.map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }.reduce(CGRect.null) { $0.union($1) }
-        let a = PDFAnnotation(bounds: union.insetBy(dx: -2, dy: -2), forType: .square, withProperties: nil)
+        let a = PDFAnnotation(bounds: union(h.rects).insetBy(dx: -2, dy: -2), forType: .square, withProperties: nil)
         a.color = .controlAccentColor
         let border = PDFBorder()
         border.lineWidth = 1.5
@@ -663,26 +708,48 @@ final class AppModel: ObservableObject {
     }
 
     func selectionEnded() {
-        guard hasTextSelection else { return }
-        if highlighterOn {
+        guard hasTextSelection, let selection = pdfView.currentSelection else { return }
+        select(nil)
+        let lines = selection.selectionsByLine().count
+        if highlighterOn, selection.pages.count == 1, lines <= Self.highlighterMaxLines {
             applyColor(penColor)
         } else {
-            select(nil)
-            placeColorPopup(show: true)
+            showSelectionBar()
         }
     }
 
-    /// Puts the color popup above the selected text, or below it when there is no room above.
-    /// Hides it when the selection is scrolled out of view.
-    func placeColorPopup(show: Bool = false) {
-        guard show || colorPopupAt != nil else { return }
-        guard hasTextSelection, let selection = pdfView.currentSelection else { hideColorPopup(); return }
+    /// In highlighter mode a selection longer than this shows the bar instead of being highlighted at once,
+    /// so a slipped drag does not paint half a page.
+    static let highlighterMaxLines = 12
+
+    func showSelectionBar() {
+        barMode = .selection(erase: selectionTouchesHighlights())
+        placeColorPopup()
+    }
+
+    func showHighlightBar() {
+        guard selected != nil else { return }
+        barMode = .highlight
+        placeColorPopup()
+    }
+
+    /// Puts the bar above the selected text or highlight, or below it when there is no room above.
+    /// Hides it while that is scrolled out of view.
+    func placeColorPopup() {
+        guard let mode = barMode else { colorPopupAt = nil; return }
+        var rect = CGRect.null
+        switch mode {
+        case .selection:
+            guard hasTextSelection, let selection = pdfView.currentSelection else { hideColorPopup(); return }
+            rect = selection.pages.map { pdfView.convert(selection.bounds(for: $0), from: $0) }.reduce(CGRect.null) { $0.union($1) }
+        case .highlight:
+            guard let h = selected, let page = document?.page(at: h.page) else { hideColorPopup(); return }
+            rect = pdfView.convert(union(h.rects), from: page)
+        }
         let bounds = pdfView.bounds
-        let rect = selection.pages.map { pdfView.convert(selection.bounds(for: $0), from: $0) }
-            .reduce(CGRect.null) { $0.union($1) }
-            .intersection(bounds)
-        guard !rect.isNull, !rect.isEmpty else { hideColorPopup(); return }
-        let size = Self.colorPopupSize
+        rect = rect.intersection(bounds)
+        guard !rect.isNull, !rect.isEmpty else { colorPopupAt = nil; return }
+        let size = barSize
         let gap: CGFloat = 6
         let top = pdfView.isFlipped ? rect.minY - bounds.minY : bounds.maxY - rect.maxY
         var y = top - gap - size.height / 2
@@ -694,7 +761,7 @@ final class AppModel: ObservableObject {
 
     private func moveColorPopupView() {
         guard let at = colorPopupAt else { colorPopupView.removeFromSuperview(); return }
-        let size = Self.colorPopupSize
+        let size = barSize
         let bounds = pdfView.bounds
         let y = pdfView.isFlipped ? bounds.minY + at.y : bounds.maxY - at.y
         colorPopupView.frame = CGRect(x: bounds.minX + at.x - size.width / 2, y: y - size.height / 2, width: size.width, height: size.height)
@@ -702,13 +769,24 @@ final class AppModel: ObservableObject {
     }
 
     func hideColorPopup() {
+        if barMode != nil { barMode = nil }
         if colorPopupAt != nil { colorPopupAt = nil }
+    }
+
+    func barAction(_ item: BarItem) {
+        switch item {
+        case .color(let c): pickColor(c)
+        case .erase: eraseSelection()
+        case .note: focusNote()
+        case .copy: _ = copySelectedHighlight()
+        case .delete: deleteSelected()
+        case .divider: break
+        }
     }
 
     func pickColor(_ color: HighlightColor) {
         penColor = color
         applyColor(color)
-        hideColorPopup()
     }
 
     func applyColor(_ color: HighlightColor) {
@@ -719,31 +797,124 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func highlightSelection(_ selection: PDFSelection, color: HighlightColor) {
-        guard let store, let document else { return }
-        var rects: [Int: [Rect]] = [:]
-        var texts: [Int: [String]] = [:]
-        for line in selection.selectionsByLine() {
-            for page in line.pages {
-                let raw = line.bounds(for: page)
-                guard raw.width >= 1, raw.height >= 1 else { continue }
-                let b = pdfView.trimLine(raw, on: page)
-                let index = document.index(for: page)
-                rects[index, default: []].append(Rect(x: b.minX, y: b.minY, w: b.width, h: b.height))
-                if let s = line.string { texts[index, default: []].append(s) }
+    /// Removes highlighting from the selected text, trimming or splitting the highlights it covers.
+    func eraseSelection() {
+        guard let selection = pdfView.currentSelection, hasTextSelection else { beep(); return }
+        highlightSelection(selection, color: nil)
+    }
+
+    func copySelectedHighlight() -> Bool {
+        guard let h = selected, !h.text.isEmpty else { return false }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(h.text, forType: .string)
+        return true
+    }
+
+    /// The highlights on a page with the characters each covers.
+    private func pageHighlights(_ index: Int, page: PDFPage) -> [PageHighlight] {
+        let hs = rendered[index] ?? ((try? store?.highlights(page: index)) ?? [])
+        return hs.map { PageHighlight($0, chars: pdfView.chars(in: $0.rects, on: page)) }
+    }
+
+    func selectionTouchesHighlights() -> Bool {
+        guard let selection = pdfView.currentSelection, let document else { return false }
+        for page in selection.pages {
+            let index = document.index(for: page)
+            guard rendered[index] != nil else { continue }
+            let chars = pdfView.chars(of: selection, on: page)
+            if pageHighlights(index, page: page).contains(where: { $0.highlight.highlightColor != .noteOnly && !$0.chars.intersection(chars).isEmpty }) {
+                return true
             }
         }
-        let made = rects.keys.sorted().map { index in
-            let text = (texts[index] ?? []).joined(separator: " ").split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-            return Highlight(page: index, rects: rects[index] ?? [], text: text, color: color)
+        return false
+    }
+
+    /// Highlights the selection in `color`, or removes highlighting from it when `color` is nil.
+    /// Same-color highlights it overlaps or touches are merged into it; other colors keep only the part outside it.
+    private func highlightSelection(_ selection: PDFSelection, color: HighlightColor?) {
+        guard let store, let document else { return }
+        let selection = pdfView.snapped(selection)
+        var ops: [PendingOp] = []
+        var made: [String] = []
+        var removedCount = 0
+        for page in selection.pages {
+            let index = document.index(for: page)
+            let chars = pdfView.chars(of: selection, on: page)
+            guard !chars.isEmpty else { continue }
+            let text = pdfView.pageText(page)
+            let plan = HighlightMerge.plan(chars, color: color, existing: pageHighlights(index, page: page), text: text)
+            let pieces = plan.pieces.compactMap { highlight(from: $0, page: page, index: index, text: text) }
+            if color == nil { removedCount += plan.removed.count }
+            ops += plan.removed.map(PendingOp.delete) + pieces.map(PendingOp.add)
+            if let color, let first = pieces.first(where: { $0.highlightColor == color }) { made.append(first.id) }
         }
-        guard !made.isEmpty else { return }
-        if commit({ confirmed in try store.add(made, confirmed: confirmed) }) { pdfView.clearSelection() }
+        guard !ops.isEmpty else {
+            if color == nil { beep() } else { pdfView.clearSelection(); hideColorPopup() }
+            return
+        }
+        guard commit({ confirmed in try store.commit(Plan(kind: .edit, label: "Edit", ops: ops), confirmed: confirmed) }) else { return }
+        pdfView.clearSelection()
+        hideColorPopup()
+        if color == nil {
+            showNotice(removedCount == 1 ? "Highlighting removed" : "Highlighting removed from \(removedCount) highlights")
+        } else if !highlighterOn, let first = made.first {
+            select(first)
+        }
+    }
+
+    /// Builds a highlight from page characters, one box per text line.
+    private func highlight(from piece: Piece, page: PDFPage, index: Int, text: PageText) -> Highlight? {
+        var rects: [Rect] = []
+        var strings: [String] = []
+        for r in text.runs(piece.chars) {
+            for line in pdfView.lineBoxes(for: r, on: page) {
+                rects.append(Rect(x: line.rect.minX, y: line.rect.minY, w: line.rect.width, h: line.rect.height))
+                strings.append(line.text)
+            }
+        }
+        guard !rects.isEmpty else { return nil }
+        let joined = strings.joined(separator: " ").split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return Highlight(id: piece.id ?? Highlight.newID(), page: index, rects: rects, text: joined, color: piece.color,
+                         note: piece.note, created: piece.created ?? Date().timeIntervalSince1970, source: piece.source ?? "app")
+    }
+
+    /// Merges overlapping highlights and widens partial words on every page, as one change that Cmd+Z undoes.
+    func tidyHighlights() {
+        guard let store, let document else { return }
+        let byPage = Dictionary(grouping: (try? store.highlights()) ?? [], by: \.page)
+        var ops: [PendingOp] = []
+        var before = 0, after = 0
+        var pages = 0
+        for index in byPage.keys.sorted() {
+            guard let page = document.page(at: index) else { continue }
+            let text = pdfView.pageText(page)
+            let plan = HighlightMerge.tidy(pageHighlights(index, page: page), text: text)
+            guard !plan.isEmpty else { continue }
+            let pieces = plan.pieces.compactMap { highlight(from: $0, page: page, index: index, text: text) }
+            ops += plan.removed.map(PendingOp.delete) + pieces.map(PendingOp.add)
+            before += plan.removed.count
+            after += pieces.count
+            pages += 1
+        }
+        guard !ops.isEmpty else {
+            notify("Nothing to tidy", info: "No highlights overlap and none stop partway through a word.")
+            return
+        }
+        let message = "Tidy \(before) highlight\(before == 1 ? "" : "s") on \(pages) page\(pages == 1 ? "" : "s") into \(after)?"
+        let info = "Overlapping highlights of one color are merged. Where colors overlap, the newer color wins. "
+            + "Highlights that stop partway through a word are widened to the whole word. Cmd+Z undoes this."
+        guard confirm(message, info: info, ok: "Tidy") else { return }
+        if commit({ _ in try store.commit(Plan(kind: .edit, label: "Edit", ops: ops), confirmed: true) }) {
+            select(nil)
+            showNotice("Tidied \(before) highlights into \(after)")
+        }
     }
 
     func deleteFromMenu() {
         if NSApp.keyWindow?.firstResponder is NSText {
             NSApp.sendAction(#selector(NSResponder.deleteToBeginningOfLine(_:)), to: nil, from: nil)
+        } else if hasTextSelection, selectionTouchesHighlights() {
+            eraseSelection()
         } else {
             deleteSelected()
         }
@@ -755,7 +926,22 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: String) {
         guard let store else { return }
-        commit { confirmed in try store.delete([id], confirmed: confirmed) }
+        if commit({ confirmed in try store.delete([id], confirmed: confirmed) }) { showNotice("Highlight deleted") }
+    }
+
+    /// Shows `message` with an Undo button at the bottom of the page for a few seconds.
+    func showNotice(_ message: String) {
+        let n = Notice(message: message)
+        withAnimation(.easeOut(duration: 0.15)) { notice = n }
+        noticeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard self?.notice?.id == n.id else { return }
+                withAnimation(.easeIn(duration: 0.2)) { self?.notice = nil }
+            }
+        }
+        noticeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
     }
 
     @discardableResult
@@ -768,6 +954,7 @@ final class AppModel: ObservableObject {
         defer {
             if recordUndo, let store, store.commitCount != before, !store.lastCommitted.isEmpty {
                 undoStack.append(store.lastCommitted)
+                if undoStack.count > 100 { undoStack.removeFirst(undoStack.count - 100) }
                 redoStack = []
             }
         }
@@ -785,6 +972,9 @@ final class AppModel: ObservableObject {
         scheduleExport()
         return true
     }
+
+    var undoTitle: String { undoStack.last.map { "Undo \(PendingOp.describe($0))" } ?? "Undo" }
+    var redoTitle: String { redoStack.last.map { "Redo \(PendingOp.describe($0))" } ?? "Redo" }
 
     func undo() {
         if NSApp.keyWindow?.firstResponder is NSText { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil); return }
@@ -806,21 +996,35 @@ final class AppModel: ObservableObject {
             if commit(recordUndo: false, { confirmed in try store.commit(Plan(kind: .edit, label: "Edit", ops: back), confirmed: confirmed) }) {
                 target.append(back)
                 pdfView.clearSelection()
+                hideColorPopup()
+                withAnimation { notice = nil }
+                if let page = back.first?.page, !isTestRun, !visiblePages.contains(page) { goTo(page: page) }
             } else {
                 source.append(ops)
             }
             return
         }
-        NSSound.beep()
+        beep()
     }
 
-    func confirm(_ message: String, ok: String = "Continue") -> Bool {
+    private var visiblePages: Set<Int> {
+        guard let document else { return [] }
+        return Set(pdfView.visiblePages.map { document.index(for: $0) })
+    }
+
+    func confirm(_ message: String, info: String = "", ok: String = "Continue") -> Bool {
         if let check = selfCheck { check.alerts.append(message); return true }
         let alert = NSAlert()
         alert.messageText = message
+        alert.informativeText = info
         alert.addButton(withTitle: ok)
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// The alert sound, silent while the self-check or a measurement runs.
+    func beep() {
+        if !isTestRun { NSSound.beep() }
     }
 
     func notify(_ message: String, info: String = "") {
@@ -906,8 +1110,22 @@ final class AppModel: ObservableObject {
             let handled = MainActor.assumeIsolated { () -> Bool in
                 let model = AppModel.shared
                 if model.colorPopupAt != nil, plain, window === model.pdfView.window, !(window?.firstResponder is NSText) {
-                    if code == 53 {
-                        model.hideColorPopup()
+                    let onHighlight = model.barMode == .highlight
+                    let canErase = model.barMode == .selection(erase: true)
+                    switch code {
+                    case 53:
+                        if onHighlight { model.select(nil) } else { model.hideColorPopup() }
+                        return true
+                    case 51, 117:
+                        if onHighlight { model.deleteSelected(); return true }
+                        if canErase { model.eraseSelection(); return true }
+                    case 45, 36:
+                        if onHighlight { model.focusNote(); return true }
+                    default:
+                        break
+                    }
+                    if digit == 0, canErase {
+                        model.eraseSelection()
                         return true
                     }
                     if let c = digit.flatMap(HighlightColor.init(rawValue:)), c != .noteOnly {
@@ -1189,7 +1407,7 @@ extension AppModel {
 
     func showNotesFile(_ file: URL) {
         saveNotes()
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else { NSSound.beep(); return }
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { beep(); return }
         notesURL = file
         notesSectionID = -1
         notesTitle = file.deletingPathExtension().lastPathComponent

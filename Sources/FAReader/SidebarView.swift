@@ -13,9 +13,10 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Sidebar", selection: $model.pagesOnly) {
-                Image(systemName: "list.bullet").help("Chapters and result text").tag(false)
-                Image(systemName: "rectangle.grid.1x2").help("Page images only").tag(true)
+            Picker("Sidebar", selection: $model.sidebarMode) {
+                Image(systemName: "list.bullet").help("Chapters and result text").tag(SidebarMode.chapters)
+                Image(systemName: "rectangle.grid.1x2").help("Page images only").tag(SidebarMode.pages)
+                Image(systemName: "highlighter").help("Highlights (⇧⌘H)").tag(SidebarMode.highlights)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -23,14 +24,16 @@ struct SidebarView: View {
             Divider()
             if model.isSearching {
                 SearchResultsView(model: model, pagesOnly: model.pagesOnly)
-            } else if model.pagesOnly {
+            } else if model.sidebarMode == .pages {
                 GeometryReader { geo in
                     PageThumbnails(pdfView: model.pdfView, width: geo.size.width)
                 }
+            } else if model.sidebarMode == .highlights {
+                HighlightsPanel(model: model, browser: model.browser)
             } else {
                 chapters
             }
-            if !model.pagesOnly {
+            if model.sidebarMode == .chapters {
                 Divider()
                 footer
             }

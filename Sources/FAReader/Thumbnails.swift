@@ -32,6 +32,7 @@ final class Thumbnailer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "fa-reader.thumbnails", qos: .userInitiated)
     private let document: PDFDocument?
     private let cache = NSCache<NSNumber, NSImage>()
+    private let crops = NSCache<NSString, NSImage>()
 
     init(url: URL) {
         document = PDFDocument(url: url)
@@ -49,6 +50,52 @@ final class Thumbnailer: @unchecked Sendable {
         } onCancel: {
             flag.set()
         }
+    }
+
+    /// The part of a page around a highlight, with the highlight drawn in its color.
+    func crop(page index: Int, rects: [CGRect], color: (Double, Double, Double), width: CGFloat) async -> NSImage? {
+        let key = "\(index)|\(rects)|\(color)|\(width)" as NSString
+        if let cached = crops.object(forKey: key) { return cached }
+        let flag = CancelFlag()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { cont in
+                queue.async { [self] in
+                    guard !flag.isSet else { cont.resume(returning: nil); return }
+                    let image = renderCrop(index, rects: rects, color: color, width: width)
+                    if let image { crops.setObject(image, forKey: key) }
+                    cont.resume(returning: image)
+                }
+            }
+        } onCancel: {
+            flag.set()
+        }
+    }
+
+    private func renderCrop(_ index: Int, rects: [CGRect], color: (Double, Double, Double), width: CGFloat) -> NSImage? {
+        guard let page = document?.page(at: index), !rects.isEmpty else { return nil }
+        let box = page.bounds(for: .cropBox)
+        let union = rects.reduce(CGRect.null) { $0.union($1) }
+        var area = union.insetBy(dx: -24, dy: -22)
+        if area.width < 300 { area = area.insetBy(dx: -(300 - area.width) / 2, dy: 0) }
+        if area.height > 260 { area = CGRect(x: area.minX, y: area.maxY - 260, width: area.width, height: 260) }
+        area = area.intersection(box)
+        guard !area.isEmpty else { return nil }
+        let scale = 2 * width / area.width
+        let w = Int(area.width * scale), h = Int(area.height * scale)
+        guard w > 0, h > 0, let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                                space: CGColorSpaceCreateDeviceRGB(),
+                                                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else { return nil }
+        ctx.setFillColor(NSColor.white.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.scaleBy(x: scale, y: scale)
+        ctx.translateBy(x: box.minX - area.minX, y: box.minY - area.minY)
+        page.draw(with: .cropBox, to: ctx)
+        ctx.translateBy(x: -box.minX, y: -box.minY)
+        ctx.setBlendMode(.multiply)
+        ctx.setFillColor(CGColor(srgbRed: color.0, green: color.1, blue: color.2, alpha: 0.6))
+        for r in rects { ctx.fill(r) }
+        guard let image = ctx.makeImage() else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: CGFloat(w) / 2, height: CGFloat(h) / 2))
     }
 
     private func render(_ index: Int, marks: [CGRect]?, terms: [String]) -> NSImage? {

@@ -954,3 +954,65 @@ private struct Pair {
     print("TIMING apply 5000 ops: \(applyTime)s, rebuild 5000 ops: \(rebuildTime)s, first sync of 5000 ops: \(syncTime)s")
     #expect(rebuildTime < 1.0)
 }
+
+// MARK: Undo across restarts
+
+@Test func recentChangesGroupsEachCommitAndSurvivesReopening() throws {
+    let folder = tempFolder()
+    let clock = TestClock()
+    let store = try makeStore(folder, clock: clock)
+    try store.add([makeHighlight("h1"), makeHighlight("h2")])
+    clock.minutes(1)
+    try store.setColor(["h1"], .pink)
+    clock.minutes(1)
+    try store.delete(["h2"])
+
+    let reopened = try makeStore(folder, clock: clock)
+    let changes = try reopened.recentChanges()
+    #expect(changes.map { $0.map(\.kind) } == [[.add, .add], [.color], [.delete]])
+    #expect(changes[1][0].oldColor == HighlightColor.yellow.rawValue)
+
+    let back = try reopened.revert(changes.last!)
+    try reopened.commit(Plan(kind: .edit, label: "Edit", ops: back))
+    #expect(try reopened.highlight(id: "h2") != nil)
+}
+
+@Test func recentChangesSplitsCommitsMadeInTheSameMillisecond() throws {
+    let store = try makeStore(tempFolder())
+    try store.add([makeHighlight("h1")])
+    try store.add([makeHighlight("h2")])
+    #expect(try store.recentChanges().count == 2)
+    #expect(try store.recentChanges(limit: 1).first?.first?.highlight == "h2")
+}
+
+@Test func recentChangesLeavesOutOtherDevices() throws {
+    let folder = tempFolder()
+    let a = try makeStore(folder, "mac-a")
+    try a.add([makeHighlight("h1")])
+    let b = try makeStore(folder, "mac-b")
+    try b.sync()
+    #expect(try b.recentChanges().isEmpty)
+}
+
+@Test func deleteThenAddWithTheSameIDRevertsToTheOriginal() throws {
+    let store = try makeStore(tempFolder())
+    let original = makeHighlight("h1", text: "Graves", note: "keep")
+    try store.add([original])
+    var merged = original
+    merged.text = "Graves disease"
+    merged.rects.append(Rect(x: 5, y: 2, w: 3, h: 4))
+    try store.commit(Plan(kind: .edit, label: "Edit", ops: [.delete(original), .add(merged)]))
+    #expect(try store.highlight(id: "h1") == merged)
+    let back = try store.revert(store.lastCommitted)
+    try store.commit(Plan(kind: .edit, label: "Edit", ops: back))
+    #expect(try store.highlight(id: "h1") == original)
+}
+
+@Test func describeNamesTheChange() {
+    let h = makeHighlight("h1")
+    #expect(PendingOp.describe([.add(h)]) == "Highlight")
+    #expect(PendingOp.describe([.add(h), .add(h)]) == "2 Highlights")
+    #expect(PendingOp.describe([.delete(h)]) == "Delete Highlight")
+    #expect(PendingOp.describe([.color(h, to: 3)]) == "Color Change")
+    #expect(PendingOp.describe([.delete(h), .add(h)]) == "Highlight Change")
+}

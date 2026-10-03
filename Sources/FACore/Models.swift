@@ -136,6 +136,34 @@ public struct PendingOp: Equatable {
     public var oldNote: String?
     public var newNote: String?
 
+    public init(kind: OpKind, highlight: String, page: Int, snapshot: Highlight? = nil, oldColor: Int? = nil, newColor: Int? = nil,
+                oldNote: String? = nil, newNote: String? = nil) {
+        self.kind = kind
+        self.highlight = highlight
+        self.page = page
+        self.snapshot = snapshot
+        self.oldColor = oldColor
+        self.newColor = newColor
+        self.oldNote = oldNote
+        self.newNote = newNote
+    }
+
+    public init(_ op: Op) {
+        self.init(kind: op.kind, highlight: op.highlight, page: op.page, snapshot: op.snapshot, oldColor: op.oldColor,
+                  newColor: op.newColor, oldNote: op.oldNote, newNote: op.newNote)
+    }
+
+    /// A short name for a change, for the Undo menu item and the undo notice.
+    public static func describe(_ ops: [PendingOp]) -> String {
+        let kinds = Set(ops.map(\.kind))
+        let adds = ops.filter { $0.kind == .add }.count, deletes = ops.filter { $0.kind == .delete }.count
+        if kinds == [.add] { return adds == 1 ? "Highlight" : "\(adds) Highlights" }
+        if kinds == [.delete] { return deletes == 1 ? "Delete Highlight" : "Delete \(deletes) Highlights" }
+        if kinds == [.color] { return "Color Change" }
+        if kinds == [.note] { return "Note" }
+        return "Highlight Change"
+    }
+
     public static func add(_ h: Highlight) -> PendingOp {
         PendingOp(kind: .add, highlight: h.id, page: h.page, snapshot: h)
     }

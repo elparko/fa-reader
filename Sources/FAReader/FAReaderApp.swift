@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if AppModel.shared.selfCheck != nil || AppModel.shared.measureOpen {
             NSApp.setActivationPolicy(.accessory)
-            for window in NSApp.windows {
+            for window in NSApp.windows where !CommandLine.arguments.contains("--visible") {
                 window.alphaValue = 0
                 window.ignoresMouseEvents = true
             }
@@ -91,8 +91,9 @@ struct AppCommands: Commands {
                 .disabled(model.store == nil)
         }
         CommandGroup(replacing: .undoRedo) {
-            Button("Undo") { model.undo() }.keyboardShortcut("z")
-            Button("Redo") { model.redo() }.keyboardShortcut("z", modifiers: [.command, .shift])
+            Button(model.noteFocused || model.searchFieldFocused ? "Undo" : model.undoTitle) { model.undo() }.keyboardShortcut("z")
+            Button(model.noteFocused || model.searchFieldFocused ? "Redo" : model.redoTitle) { model.redo() }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
         }
         CommandMenu("Highlight") {
             Button("Yellow") { model.applyColor(.yellow) }.keyboardShortcut("1")
@@ -103,9 +104,19 @@ struct AppCommands: Commands {
             Button("Edit Note") { model.focusNote() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(model.selectedID == nil)
-            Button("Delete Highlight") { model.deleteFromMenu() }
+            Button(model.selectedID == nil && model.barMode == .selection(erase: true) ? "Remove Highlight from Selection" : "Delete Highlight") {
+                model.deleteFromMenu()
+            }
                 .keyboardShortcut(.delete, modifiers: .command)
-                .disabled(model.selectedID == nil || model.noteFocused)
+                .disabled((model.selectedID == nil && model.barMode != .selection(erase: true)) || model.noteFocused)
+            Button("Copy Highlight Text") { _ = model.copySelectedHighlight() }
+                .disabled(model.selectedID == nil)
+            Divider()
+            Button("Show Highlights List") { model.showHighlightList() }
+                .keyboardShortcut("h", modifiers: [.command, .shift])
+                .disabled(model.store == nil)
+            Button("Tidy Overlapping Highlights…") { model.tidyHighlights() }
+                .disabled(model.store == nil)
         }
         CommandGroup(after: .toolbar) {
             Divider()

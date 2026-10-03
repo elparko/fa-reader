@@ -50,7 +50,7 @@ The app reads other devices' logs every 5 seconds and when it becomes active.
 - The search field is in the toolbar and always works. Cmd+F focuses it.
 - The sidebar is hidden by default. Show it with the sidebar button in the toolbar or View > Show Sidebar (Cmd+Ctrl+S). With the sidebar hidden, search results appear in a panel under the search field; with it shown, they appear in the sidebar.
 - The button at the top of the sidebar switches between chapters with result text, and page images only (page thumbnails, or result thumbnails while searching).
-- Clicking a highlight opens a small popup next to it with its colors, note and Delete. Done or Esc closes it.
+- Clicking a highlight shows a bar above it with its colors, note, copy and delete.
 - The window works down to about 480 points wide, so half a screen is fine.
 
 ## Notes pane
@@ -61,28 +61,68 @@ Each section file has an automatic highlights block between `<!-- fa-reader:high
 
 ## Highlighting
 
-Select text and a bar of four color dots pops up above it. Click a color, or press 1 to 4 (yellow, green, pink, blue), and the text is highlighted. Esc or clicking elsewhere closes the bar and leaves the text selected. The bar follows the text when you scroll or zoom.
+Select text and a bar of four color dots pops up above it. Click a color, or press 1 to 4 (yellow, green, pink, blue), and the text is highlighted. Esc closes the bar and leaves the text selected. The bar follows the text when you scroll or zoom.
 
-A drag stays on the line where it started until the mouse moves most of a line height up or down. About 4% of the text lines in First Aid report a box twice their real height that hangs over the row below. The app cuts those boxes back to their own row, both for the drag and for the saved highlight, so a highlight covers one row. Highlights made before this change keep their old boxes.
+Selections snap to whole words: a drag that starts or ends partway through a word takes the whole word, and spaces at either end are dropped. Hold Option while dragging to keep the selection exactly as dragged.
+
+Highlights never overlap:
+
+- Highlighting text that overlaps or touches a highlight of the same color joins them into one highlight. It keeps the older highlight's link and notes.
+- Highlighting over a different color takes over that part. The older highlight keeps the rest, split in two if the new one is in its middle.
+- Highlighting text that is already highlighted in that color changes nothing.
+
+To remove part of a highlight, select that text. The bar then also shows an eraser. Click it, or press Delete or 0, and only that text loses its highlighting.
+
+After you highlight, the new highlight is selected and the bar shows its tools, so a wrong color is one keypress to fix. Clicking a highlight shows the same bar: colors (the current one is ringed), note, copy and delete. Press 1 to 4 to change the color, N or Return to edit the note, Delete to delete, Esc to close. A highlight with a note also opens the note under it.
+
+Highlights are drawn from the boxes of their own characters. PDFKit reports the last character of each line with the box of the whole line, so highlights that ended at a line end used to cover the whole line. Highlights made before this change keep their old boxes until you run Tidy.
+
+A drag stays on the line where it started until the mouse moves most of a line height up or down. About 4% of the text lines in First Aid report a box twice their real height that hangs over the row below. The app cuts those boxes back to their own row, both for the drag and for the saved highlight. Neighboring rows also overlap by about a point; highlight boxes are cut halfway through that overlap, so adjacent highlighted rows do not show a darker stripe.
 
 The toolbar, next to the zoom buttons, also has a highlighter button and four color dots.
 
 - Select text, then click a color: the text is highlighted in that color.
 - Click a highlight, then click a color: the highlight changes color.
-- Click a color with nothing selected: highlighter mode turns on with that color. Every selection you make is highlighted when you release the mouse, without the popup. Click the highlighter button or press Esc to turn it off.
-- Right-click selected text to highlight it, or right-click a highlight to change its color, edit its note or delete it.
-- Where highlights overlap, click the same spot again to select the one underneath. Right-click there to get a Delete item for each of them.
-- Cmd+Z undoes the last highlight change made since the app opened: a new highlight, a color change, a note or a delete. Cmd+Shift+Z redoes it. Older changes, including ones from other devices, are undone a whole session at a time from History (Cmd+Y). In a note or the search field, Cmd+Z undoes typing instead.
+- Click a color with nothing selected: highlighter mode turns on with that color. Every selection you make is highlighted when you release the mouse, without the bar. A selection longer than 12 lines or across two pages shows the bar instead, so a slipped drag does not paint half a page. Click the highlighter button or press Esc to turn highlighter mode off.
+- Right-click selected text to highlight it or remove its highlighting, or right-click a highlight to change its color, edit its note, copy its text or delete it.
+- Highlights made by older versions can still be stacked. Click the same spot again to select the one underneath, or right-click there to get a Delete item for each.
+
+### Undo
+
+Cmd+Z undoes the last highlight change and Cmd+Shift+Z redoes it. The Edit menu names the change (Undo Highlight, Undo Delete Highlight, Undo Color Change). Each highlight, merge, removal, color change, note and Tidy is one step. The last 50 changes made on this Mac can be undone after quitting and reopening. If the change is on a page you are not looking at, the PDF jumps there.
+
+Deleting a highlight or removing highlighting shows a notice at the bottom of the page with an Undo button for 6 seconds.
+
+Changes from other devices, and older sessions, are undone a whole session at a time from History (Cmd+Y). In a note or the search field, Cmd+Z undoes typing instead.
+
+### Tidy
+
+Highlight > Tidy Overlapping Highlights… cleans up highlights made before these changes. On every page it merges overlapping highlights of one color, lets the newer color win where colors overlap, and widens highlights that stop partway through a word to the whole word. It says how many highlights it will change and asks first. Cmd+Z undoes it as one step.
+
+## Highlights list
+
+The highlighter tab at the top of the sidebar lists every highlight. Highlight > Show Highlights List (Cmd+Shift+H) and the list button in the toolbar open it.
+
+- Filter by text in the highlight or its note, by color (click one or more color chips, each showing its count), by section (the section menu; a top-level section such as Section III includes its chapters), and by page range. The page fields take a book page (`346`) or a PDF page (`pdf 367`), the same as Go to page.
+- The menu at the right of the color chips groups the list by section, color or page (or no groups), and sorts it in book order, newest first or oldest first. It also limits the list to highlights with notes, filters by `#tag`, turns page images on or off, copies the list as markdown, and runs Tidy.
+- Each row shows the highlighted text, its note, the page and the date. With page images on, it also shows the part of the page around the highlight, with the highlight in its color, so a line from a table is shown with its row.
+- Click a row, or move through rows with the arrow keys, and the PDF jumps to that highlight and selects it. Clicking a highlight in the PDF selects its row. Right-click a row to recolor, edit the note, copy or delete.
 
 ## Keyboard shortcuts
 
 | Keys | Action |
 | --- | --- |
 | Cmd+1, 2, 3, 4 | Highlight the selected text yellow, green, pink, blue. With a highlight selected and no text selected, change its color. |
-| 1, 2, 3, 4 (color popup open) | Highlight the selected text yellow, green, pink, blue |
-| Esc (color popup open) | Close the popup |
-| Cmd+Delete | Delete the selected highlight |
+| 1, 2, 3, 4 (bar open) | Highlight the selected text, or recolor the selected highlight |
+| Delete or 0 (bar open over highlighted text) | Remove highlighting from the selected text |
+| Delete (bar open over a highlight) | Delete the highlight |
+| N or Return (bar open over a highlight) | Edit its note |
+| Esc (bar open) | Close the bar |
+| Cmd+Delete | Delete the selected highlight, or remove highlighting from the selected text |
+| Cmd+C (highlight selected, no text selected) | Copy the highlight's text |
 | Cmd+Z, Cmd+Shift+Z | Undo, redo the last highlight change |
+| Cmd+Shift+H | Show or hide the highlights list |
+| Option while dragging | Select exactly as dragged, without snapping to whole words |
 | Cmd+Shift+N | Edit the note of the selected highlight |
 | Cmd+Return | Save the note |
 | Cmd+F | Focus the search field |
@@ -143,7 +183,7 @@ Each highlight line ends with `<!-- fa:<id> -->`, a stable ID another tool can k
     "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --measure-open --exit
     "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --self-check report.json
 
-`--self-check` runs without taking focus. It highlights text with Cmd+1, recolors with Cmd+3, highlights from the color popup with a mouse click and with the 2 key, checks that a drag drifting below its line selects one line, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
+`--self-check` runs without taking focus or playing sounds. Add `--visible` to keep the window on screen and save screenshots of the highlight bar, the liver page and the highlights list next to the report. It highlights text with Cmd+1, recolors with Cmd+3, highlights from the color popup with a mouse click and with the 2 key, checks that a drag drifting below its line selects one line, checks word snapping, merging, splitting, removing part of a highlight, Tidy and undo of each, filters and groups the highlights list, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
 
 ## Updates
 
