@@ -42,6 +42,14 @@ final class HighlightPDFView: PDFView {
         if NSEvent.pressedMouseButtons & 1 == 0 { endSelection() }
     }
 
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let page = page(for: point, nearest: true) {
+            for a in page.annotations where a.url != nil { page.removeAnnotation(a) }
+        }
+        super.mouseMoved(with: event)
+    }
+
     override func mouseUp(with event: NSEvent) {
         super.mouseUp(with: event)
         endSelection()

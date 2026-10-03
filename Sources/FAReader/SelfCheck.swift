@@ -122,6 +122,17 @@ final class SelfCheck {
         guard let h = made else { return }
         check("highlight drawn on page", ourAnnotations(page: graves, id: h.id) == h.rects.count, ourAnnotations(page: graves, id: h.id))
 
+        if let page = document.page(at: graves), let window = model.pdfView.window {
+            let before = page.annotations.filter { $0.url != nil }.count
+            let header = model.pdfView.convert(model.pdfView.convert(CGPoint(x: 300, y: 842), from: page), to: nil)
+            if let move = NSEvent.mouseEvent(with: .mouseMoved, location: header, modifierFlags: [], timestamp: 0,
+                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) {
+                model.pdfView.mouseMoved(with: move)
+            }
+            let after = page.annotations.filter { $0.url != nil }.count
+            check("hovering a page drops its web links", before > 0 && after == 0, "\(before) -> \(after)")
+        }
+
         model.select(h.id)
         check("clicking a highlight opens its popup next to it", model.detailsAnchor.map { $0.intersects(model.pdfView.bounds) } ?? false,
               model.detailsAnchor.map { "\($0)" } ?? "nil")
