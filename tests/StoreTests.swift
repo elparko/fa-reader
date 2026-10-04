@@ -1016,3 +1016,39 @@ private struct Pair {
     #expect(PendingOp.describe([.color(h, to: 3)]) == "Color Change")
     #expect(PendingOp.describe([.delete(h), .add(h)]) == "Highlight Change")
 }
+
+// MARK: Log lines appended off the commit
+
+@Test func queuedCommitReachesTheLogAndOtherDevices() throws {
+    let folder = tempFolder()
+    let queue = DispatchQueue(label: "test.log")
+    let a = try makeStore(folder)
+    a.logQueue = queue
+    try a.add([makeHighlight("a1")])
+    try a.setColor(["a1"], .pink)
+    #expect(try a.highlight(id: "a1")?.highlightColor == .pink)
+    queue.sync {}
+    #expect(try logObjects(folder, device: "mac-a").count == 3)
+    #expect(try a.db.scalar("SELECT COUNT(*) FROM pending_log") as? Int64 == 0)
+    let b = try makeStore(folder, "mac-b")
+    #expect(try b.highlights() == a.highlights())
+    #expect(try a.sync() == 0)
+}
+
+@Test func logLinesLeftByACrashAreAppendedOnTheNextFlush() throws {
+    let folder = tempFolder()
+    let queue = DispatchQueue(label: "test.log")
+    queue.suspend()
+    let a = try makeStore(folder)
+    a.logQueue = queue
+    try a.add([makeHighlight("a1")])
+    #expect(!FileManager.default.fileExists(atPath: folder.logURL(device: "mac-a").path))
+
+    let reopened = try makeStore(folder)
+    try reopened.flushLog()
+    #expect(try logObjects(folder, device: "mac-a").count == 2)
+    queue.resume()
+    queue.sync {}
+    #expect(try logObjects(folder, device: "mac-a").count == 2)
+    #expect(try makeStore(folder, "mac-b").highlights().map(\.id) == ["a1"])
+}

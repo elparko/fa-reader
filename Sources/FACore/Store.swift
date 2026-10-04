@@ -12,6 +12,9 @@ public final class Store {
     public private(set) var revision = 0
     public private(set) var commitCount = 0
     public private(set) var lastCommitted: [PendingOp] = []
+    /// When set, commits save their log lines in the database and append them to the log file on this queue,
+    /// so a commit never waits for file coordination.
+    public var logQueue: DispatchQueue?
 
     private var editSession: Session?
     private var lastEditTs: Double = 0
@@ -79,6 +82,7 @@ public final class Store {
         CREATE VIRTUAL TABLE IF NOT EXISTS book_fts USING fts5(
             text, tokenize='unicode61 remove_diacritics 2', prefix='2 3');
         CREATE TABLE IF NOT EXISTS sync_offsets(file TEXT PRIMARY KEY, offset INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS pending_log(id INTEGER PRIMARY KEY AUTOINCREMENT, line TEXT NOT NULL);
         """)
     }
 
@@ -163,12 +167,16 @@ public final class Store {
         }
         lines += try ops.map { try encoder.encode(LogLine.op($0)) }
 
-        try folder.append(lines, device: device)
+        if logQueue == nil { try folder.append(lines, device: device) }
         try db.transaction {
+            if logQueue != nil {
+                for line in lines { try db.run("INSERT INTO pending_log(line) VALUES(?)", String(decoding: line, as: UTF8.self)) }
+            }
             try insert(session)
             for op in ops { _ = try insert(op) }
             try applyInOrder(ops)
         }
+        logQueue?.async { try? self.flushLog() }
 
         if plan.kind == .edit {
             editSession = session
@@ -179,6 +187,15 @@ public final class Store {
         commitCount += 1
         lastCommitted = plan.ops
         return session
+    }
+
+    /// Appends the log lines saved by commits to this device's log file, then forgets them.
+    /// After a crash between the two steps the lines are appended again; reading a line twice changes nothing.
+    public func flushLog() throws {
+        let rows = try db.query("SELECT id, line FROM pending_log ORDER BY id")
+        guard let last = rows.last else { return }
+        try folder.append(rows.map { Data($0.string("line").utf8) }, device: device)
+        try db.run("DELETE FROM pending_log WHERE id<=?", last.int("id"))
     }
 
     /// The ops that put highlights back the way they were before `ops`, skipping any whose highlight has changed since.
@@ -321,20 +338,33 @@ public final class Store {
 
     @discardableResult
     public func sync() throws -> Int {
+        try apply(readLogs())
+    }
+
+    /// The unread lines of every log file. Touches only the files and their saved offsets, so it can run off the main thread.
+    public func readLogs() throws -> [LogRead] {
+        try folder.logFiles().compactMap { file in
+            let name = file.lastPathComponent
+            let offset = (try db.scalar("SELECT offset FROM sync_offsets WHERE file=?", name) as? Int64).map(Int.init) ?? 0
+            guard let (lines, end) = folder.readLines(file, from: offset), end != offset || !lines.isEmpty else { return nil }
+            return LogRead(file: name, lines: lines, end: end)
+        }
+    }
+
+    @discardableResult
+    public func apply(_ reads: [LogRead]) throws -> Int {
+        guard !reads.isEmpty else { return 0 }
         var newOps: [Op] = []
         try db.transaction {
-            for file in folder.logFiles() {
-                let name = file.lastPathComponent
-                let offset = (try db.scalar("SELECT offset FROM sync_offsets WHERE file=?", name) as? Int64).map(Int.init) ?? 0
-                guard let (lines, end) = folder.readLines(file, from: offset), end != offset || !lines.isEmpty else { continue }
-                for line in lines {
+            for read in reads {
+                for line in read.lines {
                     guard let entry = try? decoder.decode(LogLine.self, from: line) else { continue }
                     switch entry {
                     case .session(let s): try insert(s)
                     case .op(let o): if try insert(o) { newOps.append(o) }
                     }
                 }
-                try db.run("INSERT OR REPLACE INTO sync_offsets(file, offset) VALUES(?, ?)", name, end)
+                try db.run("INSERT OR REPLACE INTO sync_offsets(file, offset) VALUES(?, ?)", read.file, read.end)
             }
             try applyInOrder(newOps)
         }
@@ -427,6 +457,12 @@ public final class Store {
         try db.run("DELETE FROM tags WHERE hid=?", h.id)
         for t in tags { try db.run("INSERT OR IGNORE INTO tags(hid, tag) VALUES(?,?)", h.id, t) }
     }
+}
+
+public struct LogRead {
+    public var file: String
+    public var lines: [Data]
+    public var end: Int
 }
 
 struct OrderKey: Codable, Comparable {

@@ -91,8 +91,13 @@ public enum MarkdownExporter {
 
     public static func export(store: Store, sections: [Section], to directory: URL,
                               printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil) throws -> ExportResult {
+        try export(highlights: store.highlights(), sections: sections, to: directory, printedPage: printedPage, pdf: pdf)
+    }
+
+    public static func export(highlights: [Highlight], sections: [Section], to directory: URL,
+                              printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil) throws -> ExportResult {
         var grouped: [Int: [Highlight]] = [:]
-        for h in try store.highlights() {
+        for h in highlights {
             if let s = Sections.section(for: h.page, in: sections) { grouped[s.id, default: []].append(h) }
         }
 

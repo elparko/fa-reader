@@ -129,6 +129,9 @@ final class AppModel: ObservableObject {
     private var notesDirty = false
     private var notesSaveWork: DispatchWorkItem?
     private var exportWork: DispatchWorkItem?
+    /// Reads and writes in the book's folder that can wait on iCloud run here, off the main thread.
+    private let folderQueue = DispatchQueue(label: "fa-reader.folder", qos: .userInitiated)
+    private var syncing = false
     private var popover: NSPopover?
     private var scrollObserver: Any?
     private var ignoreScrollUntil = Date.distantPast
@@ -301,6 +304,8 @@ final class AppModel: ObservableObject {
         }
         select(nil)
         clearRendered()
+        newStore.logQueue = folderQueue
+        folderQueue.async { try? newStore.flushLog() }
         store = newStore
         undoStack = (try? newStore.recentChanges()) ?? []
         redoStack = []
@@ -1245,16 +1250,34 @@ final class AppModel: ObservableObject {
     }
 
     func sync() {
-        guard let store else { return }
-        let changed = (try? store.sync()) ?? 0
-        lastSync = Date()
-        syncedDevices = otherDevices
-        if changed > 0 {
-            loadPreviewRects()
-            reconcile()
-            refreshHistory()
-            scheduleExport()
+        guard let store, !syncing else { return }
+        syncing = true
+        folderQueue.async {
+            let reads = (try? store.readLogs()) ?? []
+            let devices = store.folder.logFiles().filter { $0.deletingPathExtension().lastPathComponent != store.device }.count
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let model = AppModel.shared
+                    model.syncing = false
+                    guard model.store === store else { return }
+                    let changed = (try? store.apply(reads)) ?? 0
+                    model.lastSync = Date()
+                    model.syncedDevices = devices
+                    if changed > 0 {
+                        model.loadPreviewRects()
+                        model.reconcile()
+                        model.refreshHistory()
+                        model.scheduleExport()
+                    }
+                }
+            }
         }
+    }
+
+    /// Waits for log lines still queued for the log file. Called when the app quits.
+    func flushLog() {
+        guard let store else { return }
+        folderQueue.sync { try? store.flushLog() }
     }
 
     // MARK: History
@@ -1443,7 +1466,23 @@ extension AppModel {
         exportWork?.cancel()
         guard let store, let dir = exportDirectory else { return }
         saveNotes()
-        _ = try? MarkdownExporter.export(store: store, sections: sections, to: dir, printedPage: { [weak self] in self?.printed($0) }, pdf: pdfURL)
-        refreshNotes(force: true)
+        let highlights = allHighlights, sections = sections, pdf = pdfURL
+        var printedPages: [Int: String] = [:]
+        for page in Set(highlights.map(\.page)) { printedPages[page] = printed(page) }
+        let write = { _ = try? MarkdownExporter.export(highlights: highlights, sections: sections, to: dir, printedPage: { printedPages[$0] }, pdf: pdf) }
+        if isTestRun {
+            write()
+            refreshNotes(force: true)
+            return
+        }
+        folderQueue.async {
+            write()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let model = AppModel.shared
+                    if model.store === store { model.refreshNotes(force: true) }
+                }
+            }
+        }
     }
 }
