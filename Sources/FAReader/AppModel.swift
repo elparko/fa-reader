@@ -585,7 +585,7 @@ final class AppModel: ObservableObject {
 
     // MARK: Selection and editing
 
-    func select(_ id: String?) {
+    func select(_ id: String?, showNote: Bool = true) {
         if id == selectedID {
             if id != nil, barMode != .highlight { showHighlightBar() }
             return
@@ -599,7 +599,7 @@ final class AppModel: ObservableObject {
         updateOutline()
         if selected != nil {
             showHighlightBar()
-            if selected?.note.isEmpty == false { showDetails() }
+            if showNote, selected?.note.isEmpty == false { showDetails() }
         } else if barMode == .highlight {
             hideColorPopup()
         }
@@ -697,8 +697,12 @@ final class AppModel: ObservableObject {
 
     func focusNote() {
         guard selectedID != nil else { return }
-        if !detailsShown { showDetails() }
-        noteFocusTick += 1
+        let opening = !detailsShown
+        if opening { showDetails() }
+        popover?.contentViewController?.view.window?.makeKey()
+        DispatchQueue.main.asyncAfter(deadline: .now() + (opening ? 0.1 : 0)) { [weak self] in
+            self?.noteFocusTick += 1
+        }
     }
 
     var hasTextSelection: Bool {
@@ -1044,18 +1048,18 @@ final class AppModel: ObservableObject {
 
     // MARK: Navigation to highlights and results
 
-    func goToHighlight(id: String, page: Int) {
+    func goToHighlight(id: String, page: Int, showNote: Bool = true) {
         goTo(page: page)
         if let h = (try? store?.highlight(id: id)) ?? nil, let first = h.rects.first, let p = document?.page(at: h.page) {
             pdfView.go(to: PDFDestination(page: p, at: CGPoint(x: max(0, first.x - 40), y: first.y + first.h + 120)))
         }
-        select(id)
+        select(id, showNote: showNote)
     }
 
     func open(result r: SearchResult) {
         hideColorPopup()
         if let id = r.highlightID {
-            goToHighlight(id: id, page: r.page)
+            goToHighlight(id: id, page: r.page, showNote: false)
         } else {
             goTo(page: r.page)
             showMatch(page: r.page)
@@ -1144,6 +1148,10 @@ final class AppModel: ObservableObject {
                         model.pickColor(c)
                         return true
                     }
+                }
+                if code == 53, plain, let window, window === model.popover?.contentViewController?.view.window {
+                    model.select(nil)
+                    return true
                 }
                 if code == 53, plain, window === model.pdfView.window, model.pdfView.highlightedSelections != nil,
                    model.searchFieldFocused || !(window?.firstResponder is NSText) {

@@ -444,7 +444,7 @@ struct ContentView: View {
         .searchable(text: $model.query, placement: .toolbar, prompt: SidebarView.searchPlaceholder)
         .onSubmit(of: .search) {
             model.showResultsPanel = true
-            if model.selectedResultID == nil { model.moveResult(1) } else { model.openSelectedResult() }
+            model.moveResult(1)
         }
         .sheet(isPresented: $model.showHistory) { HistoryView(model: model) }
         .sheet(isPresented: $model.showImport) { ImportView(model: model) }
