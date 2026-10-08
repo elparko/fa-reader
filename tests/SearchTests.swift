@@ -84,6 +84,19 @@ private func percentile95(_ values: [Double]) -> Double {
     #expect(Set(results.map(\.id)).count == results.count)
 }
 
+@Test func bookPagesNeedTermsCloseTogether() throws {
+    let store = try makeStore()
+    let filler = String(repeating: "filler ", count: 40)
+    try addPage(store.db, 4, "Graves was described in 1835. \(filler) Chronic kidney disease")
+    try addPage(store.db, 5, "the disease of Graves")
+    try addPage(store.db, 6, "Graves disease causes hyperthyroidism")
+    let searcher = Searcher(database: store.db)
+    #expect(Searcher.nearQuery("graves dis") == "NEAR(\"graves\"* \"dis\"*, 10)")
+    #expect(Searcher.nearQuery("graves") == nil)
+    #expect(try searcher.search("graves dis").map(\.id) == ["book:6", "book:5"])
+    #expect(try searcher.search("graves dis", filter: SearchFilter(pages: 0...4)).map(\.id) == ["book:4"])
+}
+
 @Test func snippetMarksMatchedTerms() throws {
     let store = try makeStore()
     try addPage(store.db, 4, "Graves disease causes hyperthyroidism through TSH receptor antibodies")

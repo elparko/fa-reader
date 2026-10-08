@@ -68,6 +68,16 @@ public final class Searcher {
         return "\"\(tokens.joined(separator: " "))\"*"
     }
 
+    /// Terms within a few words of each other, in any order. Book pages are long, so requiring
+    /// every term anywhere on the page matches words from unrelated sentences.
+    public static func nearQuery(_ text: String) -> String? {
+        let tokens = tokens(text)
+        guard tokens.count > 1 else { return nil }
+        return "NEAR(\(tokens.map { "\"\($0)\"*" }.joined(separator: " ")), \(nearDistance))"
+    }
+
+    static let nearDistance = 10
+
     public func search(_ text: String, filter: SearchFilter = SearchFilter(), limit: Int = 60) throws -> [SearchResult] {
         guard let query = Searcher.ftsQuery(text) else {
             return filter.isEmpty ? [] : try listHighlights(filter: filter, limit: limit)
@@ -77,19 +87,28 @@ public final class Searcher {
             return try search(match: query, noteMatch: anyTerm, filter: filter, limit: limit)
         }
         let exact = try search(match: phrase, noteMatch: phrase, filter: filter, limit: limit)
-        let seen = Set(exact.map { $0.highlightID ?? $0.id })
-        let partial = try search(match: query, noteMatch: anyTerm, filter: filter, limit: limit)
-        return exact + partial.filter { !seen.contains($0.highlightID ?? $0.id) }
+        var seen = Set(exact.map { $0.highlightID ?? $0.id })
+        let near = Searcher.nearQuery(text) ?? query
+        let partial = try search(match: query, noteMatch: anyTerm, bookMatch: near, filter: filter, limit: limit)
+            .filter { !seen.contains($0.highlightID ?? $0.id) }
+        var results = exact + partial
+        // Only when no page has the terms close together, fall back to pages that have them far apart.
+        if filter.color == nil, filter.tag == nil, !results.contains(where: { $0.kind == .book }) {
+            seen.formUnion(partial.map { $0.highlightID ?? $0.id })
+            results += try bookRows(match: query, pages: filter.pages, limit: limit).filter { !seen.contains($0.id) }
+        }
+        return results
     }
 
-    private func search(match: String, noteMatch: String, filter: SearchFilter, limit: Int) throws -> [SearchResult] {
+    private func search(match: String, noteMatch: String, bookMatch: String? = nil, filter: SearchFilter,
+                        limit: Int) throws -> [SearchResult] {
         let noteIDs = Set(try highlightRows(match: "{note tags} : (\(noteMatch))", filter: filter, limit: -1).map(\.id))
         let all = try highlightRows(match: match, filter: filter, limit: -1)
         let notes = all.filter { noteIDs.contains($0.id) }.prefix(limit)
         var results = notes.map { result($0, kind: .note) }
         results += all.filter { !noteIDs.contains($0.id) }.prefix(limit).map { result($0, kind: .highlight) }
         if filter.color == nil, filter.tag == nil {
-            results += try bookRows(match: match, pages: filter.pages, limit: limit)
+            results += try bookRows(match: bookMatch ?? match, pages: filter.pages, limit: limit)
         }
         return results
     }
