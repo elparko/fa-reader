@@ -35,6 +35,7 @@ final class HighlightPDFView: PDFView {
         displayDirection = .vertical
         displaysPageBreaks = true
         autoScales = true
+        interpolationQuality = .high
         minScaleFactor = 0.2
         maxScaleFactor = 8
         backgroundColor = .underPageBackgroundColor
