@@ -106,9 +106,17 @@ final class AppModel: ObservableObject {
     @Published var query = "" {
         didSet {
             if query != oldValue, !query.isEmpty { showResultsPanel = true }
-            runSearch()
+            if query.isEmpty {
+                runSearch()
+            } else {
+                searchWork?.cancel()
+                let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.runSearch() } }
+                searchWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+            }
         }
     }
+    private var searchWork: DispatchWorkItem?
     @Published var showResultsPanel = false
     @Published var notesShown = UserDefaults.standard.bool(forKey: "notesShown") {
         didSet {
@@ -1208,6 +1216,7 @@ final class AppModel: ObservableObject {
     // MARK: Search
 
     func runSearch() {
+        searchWork?.cancel()
         guard let runner else { return }
         let text = query.trimmingCharacters(in: .whitespaces)
         let filter = self.filter
