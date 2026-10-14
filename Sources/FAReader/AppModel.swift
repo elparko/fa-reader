@@ -334,7 +334,7 @@ final class AppModel: ObservableObject {
         updatePageLabel()
         sections = Sections.from(document: doc)
         refreshHistory()
-        syncedDevices = otherDevices
+        refreshSyncedDevices()
         lastSync = Date()
         startIndexing(url: url, pageCount: doc.pageCount)
         notesSectionID = nil
@@ -1255,9 +1255,18 @@ final class AppModel: ObservableObject {
 
     // MARK: Sync
 
-    private var otherDevices: Int {
-        guard let store else { return 0 }
-        return store.folder.logFiles().filter { $0.deletingPathExtension().lastPathComponent != store.device }.count
+    private func refreshSyncedDevices() {
+        guard let store else { syncedDevices = 0; return }
+        folderQueue.async {
+            let devices = store.folder.logFiles().filter { $0.deletingPathExtension().lastPathComponent != store.device }.count
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let model = AppModel.shared
+                    guard model.store === store else { return }
+                    model.syncedDevices = devices
+                }
+            }
+        }
     }
 
     func sync() {

@@ -45,7 +45,11 @@ public struct SyncFolder {
     }
 
     public func logFiles() -> [URL] {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: changesURL.path)) ?? []
+        var names: [String] = []
+        var coordError: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: changesURL, options: .withoutChanges, error: &coordError) { u in
+            names = (try? FileManager.default.contentsOfDirectory(atPath: u.path)) ?? []
+        }
         var files: [URL] = []
         for name in names {
             if name.hasPrefix("."), name.hasSuffix(".jsonl.icloud") {
