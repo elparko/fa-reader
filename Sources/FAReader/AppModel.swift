@@ -76,6 +76,11 @@ struct PendingUndo: Equatable {
     static func == (a: PendingUndo, b: PendingUndo) -> Bool { a.sessionID == b.sessionID && a.revert == b.revert && a.skipped == b.skipped }
 }
 
+private struct LoadedBook: @unchecked Sendable {
+    let document: PDFDocument
+    let sections: [FACore.Section]
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     static let shared = AppModel()
@@ -203,6 +208,7 @@ final class AppModel: ObservableObject {
     private(set) var runner: SearchRunner?
     private var printedCache: [Int: String?] = [:]
     private var pendingURL: URL?
+    private var openToken = 0
     private var started = false
     private var openReported = false
     fileprivate var searchReported = false
@@ -297,12 +303,27 @@ final class AppModel: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url { open(url) }
     }
 
-    func open(_ url: URL) {
+    func open(_ url: URL, completion: (() -> Void)? = nil) {
         flushNote()
-        guard let doc = PDFDocument(url: url) else {
+        openToken += 1
+        let token = openToken
+        DispatchQueue.global(qos: .userInitiated).async {
+            let loaded = PDFDocument(url: url).map { LoadedBook(document: $0, sections: Sections.from(document: $0)) }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard AppModel.shared.openToken == token else { return }
+                    AppModel.shared.finishOpen(url, loaded: loaded, completion: completion)
+                }
+            }
+        }
+    }
+
+    private func finishOpen(_ url: URL, loaded: LoadedBook?, completion: (() -> Void)?) {
+        guard let loaded else {
             notify("Cannot open \(url.lastPathComponent)")
             return
         }
+        let doc = loaded.document
         let newStore: Store
         do {
             newStore = try Store(pdfURL: url, device: deviceID, deviceName: Host.current().localizedName ?? "Mac")
@@ -321,6 +342,7 @@ final class AppModel: ObservableObject {
         let lastPage = UserDefaults.standard.object(forKey: "lastPage:\(url.path)") as? Int
         pdfURL = url
         document = doc
+        sections = loaded.sections
         pdfView.document = doc
         pdfView.autoScales = true
         watchScrolling()
@@ -340,7 +362,6 @@ final class AppModel: ObservableObject {
         loadPreviewRects()
         reconcile()
         updatePageLabel()
-        sections = Sections.from(document: doc)
         refreshHistory()
         refreshSyncedDevices()
         lastSync = Date()
@@ -351,6 +372,7 @@ final class AppModel: ObservableObject {
             pendingURL = nil
             handle(url: pending)
         }
+        completion?()
     }
 
     private var deviceID: String {
@@ -1196,8 +1218,13 @@ final class AppModel: ObservableObject {
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         if let path = items.first(where: { $0.name == "pdf" })?.value, path != pdfURL?.path,
            FileManager.default.fileExists(atPath: path) {
-            open(URL(fileURLWithPath: path))
+            open(URL(fileURLWithPath: path)) { [self] in jumpToLink(items) }
+            return
         }
+        jumpToLink(items)
+    }
+
+    private func jumpToLink(_ items: [URLQueryItem]) {
         let page = items.first { $0.name == "page" }?.value.flatMap(Int.init)
         let id = items.first { $0.name == "highlight" }?.value
         if let id, let h = try? store?.highlight(id: id) {

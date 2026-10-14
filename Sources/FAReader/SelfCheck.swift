@@ -20,6 +20,11 @@ final class SelfCheck {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
+    private func waitFor(_ condition: () -> Bool, timeout: Double = 10) async {
+        let end = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < end { await pause(0.05) }
+    }
+
     private func press(_ key: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = .command) -> Bool {
         guard let window = model.pdfView.window,
               let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
@@ -690,12 +695,14 @@ final class SelfCheck {
         let other = report.deletingLastPathComponent().appendingPathComponent("one.pdf")
         if FileManager.default.fileExists(atPath: other.path), let original {
             NSApp.delegate?.application?(NSApp, open: [other])
-            await pause(0.5)
+            await waitFor { model.pdfURL == other }
+            await pause(0.3)
             check("opening another PDF switches book", model.pdfURL == other && model.pageCount == 1, model.bookTitle)
             check("each book has its own data folder", model.store?.folder.root.lastPathComponent == "one.fa-reader")
             let link = MarkdownExporter.link(page: 412, pdf: original)
             NSApp.delegate?.application?(NSApp, open: [URL(string: link)!])
-            await pause(0.5)
+            await waitFor { model.pdfURL == original }
+            await pause(0.3)
             check("link naming another book opens that book and page", model.pdfURL == original && model.currentPageIndex == 412,
                   "\(model.bookTitle) \(model.currentPageIndex) via \(link)")
             check("window title is the book name", model.bookTitle == original.deletingPathExtension().lastPathComponent)

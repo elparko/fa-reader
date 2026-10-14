@@ -37,13 +37,13 @@ final class Thumbnailer: @unchecked Sendable {
     static let width: CGFloat = 120
 
     private let queue = DispatchQueue(label: "fa-reader.thumbnails", qos: .userInitiated)
-    private let document: PDFDocument?
+    private var document: PDFDocument?
     private let cache = NSCache<NSNumber, NSImage>()
     private let crops = NSCache<NSString, NSImage>()
 
     init(url: URL) {
-        document = PDFDocument(url: url)
         cache.countLimit = 400
+        queue.async { [self] in document = PDFDocument(url: url) }
     }
 
     func thumbnail(page index: Int, marks: [CGRect]?, terms: [String]) async -> NSImage? {
