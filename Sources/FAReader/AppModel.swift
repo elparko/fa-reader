@@ -54,6 +54,16 @@ final class SearchRunner: @unchecked Sendable {
     }
 }
 
+final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+
+    var value: Int {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); defer { lock.unlock() }; stored = newValue }
+    }
+}
+
 enum BarMode: Equatable {
     case selection(erase: Bool), highlight
 }
@@ -218,6 +228,9 @@ final class AppModel: ObservableObject {
     private var pendingURL: URL?
     private var isLoading = false
     private var openToken = 0
+    private let latestOpenToken = LockedCounter()
+    private var searchSeq = 0
+    private var searchInFlight = false
     private var started = false
     private var openReported = false
     fileprivate var searchReported = false
@@ -313,14 +326,25 @@ final class AppModel: ObservableObject {
     }
 
     func open(_ url: URL, completion: (() -> Void)? = nil) {
+        if url == pdfURL, document != nil {
+            openToken += 1
+            latestOpenToken.value = openToken
+            isLoading = false
+            completion?()
+            return
+        }
         flushNote()
         openToken += 1
         let token = openToken
+        latestOpenToken.value = token
+        let latest = latestOpenToken
         isLoading = true
         let device = deviceID
         DispatchQueue.global(qos: .userInitiated).async {
-            let loaded = PDFDocument(url: url).map { doc in
-                LoadedBook(document: doc, sections: Sections.from(document: doc), store: Result {
+            let loaded = PDFDocument(url: url).flatMap { doc -> LoadedBook? in
+                let sections = Sections.from(document: doc)
+                guard latest.value == token else { return nil }
+                return LoadedBook(document: doc, sections: sections, store: Result {
                     try Store(pdfURL: url, device: device, deviceName: Host.current().localizedName ?? "Mac")
                 })
             }
@@ -344,6 +368,9 @@ final class AppModel: ObservableObject {
             notify("Cannot open \(url.lastPathComponent)")
             return
         }
+        searchSeq += 1
+        searchInFlight = false
+        runner?.cancel()
         let doc = loaded.document
         let newStore: Store
         do {
@@ -1150,7 +1177,7 @@ final class AppModel: ObservableObject {
     }
 
     func moveResult(_ delta: Int) {
-        if searchWork != nil { runSearch { [self] in moveResult(delta) }; return }
+        if searchWork != nil || searchInFlight { runSearch { [self] in moveResult(delta) }; return }
         guard !results.isEmpty else { return }
         let current = selectedResultID.flatMap { id in results.firstIndex { $0.id == id } }
         let next = current.map { min(max($0 + delta, 0), results.count - 1) } ?? (delta < 0 ? results.count - 1 : 0)
@@ -1158,7 +1185,7 @@ final class AppModel: ObservableObject {
     }
 
     func openSelectedResult() {
-        if searchWork != nil { runSearch { [self] in openSelectedResult() }; return }
+        if searchWork != nil || searchInFlight { runSearch { [self] in openSelectedResult() }; return }
         guard let id = selectedResultID, let r = results.first(where: { $0.id == id }) else { return }
         open(result: r)
     }
@@ -1286,7 +1313,10 @@ final class AppModel: ObservableObject {
         guard let runner else { return }
         let text = query.trimmingCharacters(in: .whitespaces)
         let filter = self.filter
+        searchSeq += 1
+        let seq = searchSeq
         guard !text.isEmpty || !filter.isEmpty else {
+            searchInFlight = false
             runner.cancel()
             results = []
             selectedResultID = nil
@@ -1295,11 +1325,14 @@ final class AppModel: ObservableObject {
             action?()
             return
         }
+        searchInFlight = true
         runner.run(text, filter: filter) { [weak self] found, ms in
             Task { @MainActor in
-                if self?.results.map(\.id) != found.map(\.id) { self?.selectedResultID = nil }
-                self?.results = found
-                self?.searchMs = ms
+                guard let self, self.searchSeq == seq else { return }
+                self.searchInFlight = false
+                if self.results.map(\.id) != found.map(\.id) { self.selectedResultID = nil }
+                self.results = found
+                self.searchMs = ms
                 action?()
             }
         }
