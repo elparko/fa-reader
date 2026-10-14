@@ -82,6 +82,13 @@ private struct LoadedBook: @unchecked Sendable {
 }
 
 @MainActor
+final class PageState: ObservableObject {
+    @Published var label = ""
+    @Published var index = 0
+    @Published var section: FACore.Section?
+}
+
+@MainActor
 final class AppModel: ObservableObject {
     static let shared = AppModel()
 
@@ -91,7 +98,7 @@ final class AppModel: ObservableObject {
     @Published var document: PDFDocument?
     @Published var pdfURL: URL?
     @Published var sections: [FACore.Section] = []
-    @Published var pageLabel = ""
+    let pageState = PageState()
     @Published var selectedID: String?
     @Published var selected: Highlight?
     @Published var noteDraft = ""
@@ -489,12 +496,16 @@ final class AppModel: ObservableObject {
     }
 
     func updatePageLabel() {
-        guard document != nil else { pageLabel = ""; return }
+        guard document != nil else { pageState.label = ""; return }
         let index = currentPageIndex
         refreshNotes()
         if let url = pdfURL, !isTestRun { UserDefaults.standard.set(index, forKey: "lastPage:\(url.path)") }
         let pdf = "PDF \(index + 1) of \(pageCount)"
-        pageLabel = printed(index).map { "p. \($0) · \(index + 1)/\(pageCount)" } ?? pdf
+        let section = Sections.section(for: index, in: sections)
+        if pageState.index != index { pageState.index = index }
+        if pageState.section != section { pageState.section = section }
+        let label = printed(index).map { "p. \($0) · \(index + 1)/\(pageCount)" } ?? pdf
+        if pageState.label != label { pageState.label = label }
     }
 
     func goTo(page: Int) {

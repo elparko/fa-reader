@@ -404,7 +404,7 @@ struct ContentView: View {
             }
                 .toolbar {
                     ToolbarItem(placement: .principal) {
-                        Text(model.pageLabel.isEmpty ? " " : model.pageLabel).monospacedDigit()
+                        PageLabelText(page: model.pageState)
                     }
                     ToolbarItemGroup {
                         Toggle(isOn: $model.highlighterOn) {
@@ -608,5 +608,13 @@ struct ColorDot: View {
         }
         .frame(width: 22, height: 22)
         .contentShape(Rectangle())
+    }
+}
+
+private struct PageLabelText: View {
+    @ObservedObject var page: PageState
+
+    var body: some View {
+        Text(page.label.isEmpty ? " " : page.label).monospacedDigit()
     }
 }

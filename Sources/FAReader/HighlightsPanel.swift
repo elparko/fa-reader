@@ -204,34 +204,7 @@ struct HighlightsPanel: View {
     }
 
     private var sectionMenu: some View {
-        let current = Sections.section(for: model.currentPageIndex, in: model.sections)
-        let title = browser.sectionID.flatMap { id in model.sections.first { $0.id == id }?.title } ?? "Whole book"
-        return Menu {
-            Button("Whole book") { browser.sectionID = nil }
-            if let current {
-                Button("This section: \(current.title)") { browser.sectionID = current.id }
-            }
-            Divider()
-            ForEach(model.sections.filter { $0.parent == nil }) { top in
-                let children = model.sections.filter { $0.parent == top.title }
-                if children.isEmpty {
-                    Button(top.title) { browser.sectionID = top.id }
-                } else {
-                    Menu(top.title) {
-                        Button("All of \(top.title)") { browser.sectionID = top.id }
-                        Divider()
-                        ForEach(children) { child in
-                            Button(child.title) { browser.sectionID = child.id }
-                        }
-                    }
-                }
-            }
-        } label: {
-            Text(title).lineLimit(1).truncationMode(.middle)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize(horizontal: false, vertical: true)
-        .help("Show highlights from one section")
+        SectionMenu(model: model, browser: browser, page: model.pageState)
     }
 
     private func optionsMenu(_ groups: [HighlightGroup]) -> some View {
@@ -393,5 +366,42 @@ struct HighlightCrop: View {
             let rects = highlight.rects.map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }
             image = await model.thumbnailer?.crop(page: highlight.page, rects: rects, color: highlight.highlightColor.rgb, width: 280)
         }
+    }
+}
+
+private struct SectionMenu: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var browser: HighlightBrowser
+    @ObservedObject var page: PageState
+
+    var body: some View {
+        let current = page.section
+        let title = browser.sectionID.flatMap { id in model.sections.first { $0.id == id }?.title } ?? "Whole book"
+        return Menu {
+            Button("Whole book") { browser.sectionID = nil }
+            if let current {
+                Button("This section: \(current.title)") { browser.sectionID = current.id }
+            }
+            Divider()
+            ForEach(model.sections.filter { $0.parent == nil }) { top in
+                let children = model.sections.filter { $0.parent == top.title }
+                if children.isEmpty {
+                    Button(top.title) { browser.sectionID = top.id }
+                } else {
+                    Menu(top.title) {
+                        Button("All of \(top.title)") { browser.sectionID = top.id }
+                        Divider()
+                        ForEach(children) { child in
+                            Button(child.title) { browser.sectionID = child.id }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Text(title).lineLimit(1).truncationMode(.middle)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize(horizontal: false, vertical: true)
+        .help("Show highlights from one section")
     }
 }
