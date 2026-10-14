@@ -91,7 +91,9 @@ public enum HighlightList {
     }
 
     public static func tags(_ all: [Highlight]) -> [String] {
-        Set(all.flatMap(\.tags)).sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+        var seen = Set<[UInt8]>()
+        return all.flatMap(\.tags).filter { seen.insert(Array($0.utf8)).inserted }
+            .sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
     }
 
     public static func filter(_ all: [Highlight], _ f: HighlightFilter) -> [Highlight] {

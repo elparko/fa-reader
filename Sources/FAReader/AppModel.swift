@@ -79,6 +79,7 @@ struct PendingUndo: Equatable {
 private struct LoadedBook: @unchecked Sendable {
     let document: PDFDocument
     let sections: [FACore.Section]
+    let store: Result<Store, Error>
 }
 
 @MainActor
@@ -215,6 +216,7 @@ final class AppModel: ObservableObject {
     private(set) var runner: SearchRunner?
     private var printedCache: [Int: String?] = [:]
     private var pendingURL: URL?
+    private var isLoading = false
     private var openToken = 0
     private var started = false
     private var openReported = false
@@ -314,12 +316,24 @@ final class AppModel: ObservableObject {
         flushNote()
         openToken += 1
         let token = openToken
+        isLoading = true
+        let device = deviceID
         DispatchQueue.global(qos: .userInitiated).async {
-            let loaded = PDFDocument(url: url).map { LoadedBook(document: $0, sections: Sections.from(document: $0)) }
+            let loaded = PDFDocument(url: url).map { doc in
+                LoadedBook(document: doc, sections: Sections.from(document: doc), store: Result {
+                    try Store(pdfURL: url, device: device, deviceName: Host.current().localizedName ?? "Mac")
+                })
+            }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard AppModel.shared.openToken == token else { return }
-                    AppModel.shared.finishOpen(url, loaded: loaded, completion: completion)
+                    let model = AppModel.shared
+                    guard model.openToken == token else { return }
+                    model.isLoading = false
+                    model.finishOpen(url, loaded: loaded, completion: completion)
+                    if let pending = model.pendingURL {
+                        model.pendingURL = nil
+                        model.handle(url: pending)
+                    }
                 }
             }
         }
@@ -333,7 +347,7 @@ final class AppModel: ObservableObject {
         let doc = loaded.document
         let newStore: Store
         do {
-            newStore = try Store(pdfURL: url, device: deviceID, deviceName: Host.current().localizedName ?? "Mac")
+            newStore = try loaded.store.get()
         } catch {
             notify("Cannot open the annotation store", info: "\(error)")
             return
@@ -375,10 +389,6 @@ final class AppModel: ObservableObject {
         startIndexing(url: url, pageCount: doc.pageCount)
         notesSectionID = nil
         refreshNotes(force: true)
-        if let pending = pendingURL {
-            pendingURL = nil
-            handle(url: pending)
-        }
         completion?()
     }
 
@@ -1140,6 +1150,7 @@ final class AppModel: ObservableObject {
     }
 
     func moveResult(_ delta: Int) {
+        if searchWork != nil { runSearch { [self] in moveResult(delta) }; return }
         guard !results.isEmpty else { return }
         let current = selectedResultID.flatMap { id in results.firstIndex { $0.id == id } }
         let next = current.map { min(max($0 + delta, 0), results.count - 1) } ?? (delta < 0 ? results.count - 1 : 0)
@@ -1147,6 +1158,7 @@ final class AppModel: ObservableObject {
     }
 
     func openSelectedResult() {
+        if searchWork != nil { runSearch { [self] in openSelectedResult() }; return }
         guard let id = selectedResultID, let r = results.first(where: { $0.id == id }) else { return }
         open(result: r)
     }
@@ -1240,7 +1252,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard url.scheme == "fa-reader" else { return }
-        guard store != nil else { pendingURL = url; return }
+        guard store != nil, !isLoading else { pendingURL = url; return }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         if let path = items.first(where: { $0.name == "pdf" })?.value, path != pdfURL?.path,
            FileManager.default.fileExists(atPath: path) {
@@ -1268,8 +1280,9 @@ final class AppModel: ObservableObject {
 
     // MARK: Search
 
-    func runSearch() {
+    func runSearch(then action: (@MainActor () -> Void)? = nil) {
         searchWork?.cancel()
+        searchWork = nil
         guard let runner else { return }
         let text = query.trimmingCharacters(in: .whitespaces)
         let filter = self.filter
@@ -1279,6 +1292,7 @@ final class AppModel: ObservableObject {
             selectedResultID = nil
             pdfView.highlightedSelections = nil
             searchMs = nil
+            action?()
             return
         }
         runner.run(text, filter: filter) { [weak self] found, ms in
@@ -1286,6 +1300,7 @@ final class AppModel: ObservableObject {
                 if self?.results.map(\.id) != found.map(\.id) { self?.selectedResultID = nil }
                 self?.results = found
                 self?.searchMs = ms
+                action?()
             }
         }
     }

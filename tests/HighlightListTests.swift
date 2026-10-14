@@ -113,3 +113,10 @@ private let sample = [
     let all = [h("a", page: 1, note: "#b #a"), h("b", page: 1, note: "#a x"), h("c", page: 2)]
     #expect(HighlightList.tags(all) == ["a", "b"])
 }
+
+@Test func tagsKeepCanonicallyEqualStringsWithDifferentBytes() {
+    let all = [h("a", page: 1, note: "#caf\u{E9}"), h("b", page: 1, note: "#cafe\u{301}")]
+    let tags = HighlightList.tags(all)
+    #expect(tags.count == 2)
+    #expect(Set(tags.map { Array($0.utf8) }).count == 2)
+}
