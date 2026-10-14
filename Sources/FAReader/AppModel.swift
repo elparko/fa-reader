@@ -1051,7 +1051,9 @@ final class AppModel: ObservableObject {
     func goToHighlight(id: String, page: Int, showNote: Bool = true) {
         goTo(page: page)
         if let h = (try? store?.highlight(id: id)) ?? nil, let first = h.rects.first, let p = document?.page(at: h.page) {
-            pdfView.go(to: PDFDestination(page: p, at: CGPoint(x: max(0, first.x - 40), y: first.y + first.h + 120)))
+            let box = union(h.rects)
+            let halfView = pdfView.bounds.height / max(pdfView.scaleFactor, 0.01) / 2
+            pdfView.go(to: PDFDestination(page: p, at: CGPoint(x: max(0, first.x - 40), y: box.midY + halfView)))
         }
         select(id, showNote: showNote)
     }
@@ -1149,7 +1151,8 @@ final class AppModel: ObservableObject {
                         return true
                     }
                 }
-                if code == 53, plain, let window, window === model.popover?.contentViewController?.view.window {
+                if code == 53, plain, model.detailsShown,
+                   window === model.popover?.contentViewController?.view.window || window === model.pdfView.window {
                     model.select(nil)
                     return true
                 }
