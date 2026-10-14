@@ -231,6 +231,7 @@ final class AppModel: ObservableObject {
     private let latestOpenToken = LockedCounter()
     private var searchSeq = 0
     private var searchInFlight = false
+    private var queuedSearchActions: [@MainActor () -> Void] = []
     private var started = false
     private var openReported = false
     fileprivate var searchReported = false
@@ -331,6 +332,10 @@ final class AppModel: ObservableObject {
             latestOpenToken.value = openToken
             isLoading = false
             completion?()
+            if let pending = pendingURL {
+                pendingURL = nil
+                handle(url: pending)
+            }
             return
         }
         flushNote()
@@ -370,6 +375,7 @@ final class AppModel: ObservableObject {
         }
         searchSeq += 1
         searchInFlight = false
+        queuedSearchActions = []
         runner?.cancel()
         let doc = loaded.document
         let newStore: Store
@@ -1176,8 +1182,32 @@ final class AppModel: ObservableObject {
         pdfView.clearSelection()
     }
 
+    func abandonSearch() {
+        searchSeq += 1
+        searchInFlight = false
+        queuedSearchActions = []
+    }
+
+    private func deferUntilSearchDone(_ action: @escaping @MainActor () -> Void) -> Bool {
+        if searchWork != nil {
+            runSearch(then: action)
+            return true
+        }
+        if searchInFlight {
+            queuedSearchActions.append(action)
+            return true
+        }
+        return false
+    }
+
+    private func runQueuedSearchActions() {
+        let pending = queuedSearchActions
+        queuedSearchActions = []
+        for action in pending { action() }
+    }
+
     func moveResult(_ delta: Int) {
-        if searchWork != nil || searchInFlight { runSearch { [self] in moveResult(delta) }; return }
+        if deferUntilSearchDone({ [self] in moveResult(delta) }) { return }
         guard !results.isEmpty else { return }
         let current = selectedResultID.flatMap { id in results.firstIndex { $0.id == id } }
         let next = current.map { min(max($0 + delta, 0), results.count - 1) } ?? (delta < 0 ? results.count - 1 : 0)
@@ -1185,7 +1215,7 @@ final class AppModel: ObservableObject {
     }
 
     func openSelectedResult() {
-        if searchWork != nil || searchInFlight { runSearch { [self] in openSelectedResult() }; return }
+        if deferUntilSearchDone({ [self] in openSelectedResult() }) { return }
         guard let id = selectedResultID, let r = results.first(where: { $0.id == id }) else { return }
         open(result: r)
     }
@@ -1322,6 +1352,7 @@ final class AppModel: ObservableObject {
             selectedResultID = nil
             pdfView.highlightedSelections = nil
             searchMs = nil
+            runQueuedSearchActions()
             action?()
             return
         }
@@ -1333,6 +1364,7 @@ final class AppModel: ObservableObject {
                 if self.results.map(\.id) != found.map(\.id) { self.selectedResultID = nil }
                 self.results = found
                 self.searchMs = ms
+                self.runQueuedSearchActions()
                 action?()
             }
         }

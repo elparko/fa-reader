@@ -144,7 +144,8 @@ final class SelfCheck {
     }
 
     private func search(_ text: String, filter: SearchFilter = SearchFilter()) async -> ([SearchResult], Double) {
-        await withCheckedContinuation { cont in
+        model.abandonSearch()
+        return await withCheckedContinuation { cont in
             model.runner?.run(text, filter: filter) { results, ms in cont.resume(returning: (results, ms)) }
         }
     }
