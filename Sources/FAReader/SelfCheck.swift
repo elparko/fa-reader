@@ -235,6 +235,10 @@ final class SelfCheck {
             check("section filter", inSection.contains { $0.highlightID == h.id } && !outSection.contains { $0.highlightID == h.id })
         }
 
+        model.pdfView.window?.makeFirstResponder(model.pdfView)
+        _ = press("f", keyCode: 3)
+        await pause(0.4)
+        check("⌘F focuses the search field", model.searchFieldFocused)
         model.query = "hyperthyroidism"
         await pause(0.5)
         if let field = findField(in: model.pdfView.window?.contentView?.superview) {

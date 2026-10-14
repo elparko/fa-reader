@@ -1098,16 +1098,29 @@ final class AppModel: ObservableObject {
         return h.rects.map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }
     }
 
-    func focusSearch() {
-        guard let window = pdfView.window else { return }
+    /// Puts the cursor in the toolbar search field and selects what is in it. Goes through the toolbar's
+    /// search item, which expands the field when the window is narrow and works before the field has been
+    /// drawn, and tries again for a moment while the window and its toolbar are still coming up on launch.
+    func focusSearch(attempt: Int = 0) {
+        showResultsPanel = true
+        let window = pdfView.window ?? NSApp.keyWindow ?? NSApp.mainWindow
         func find(_ view: NSView) -> NSSearchField? {
             if let f = view as? NSSearchField, f.placeholderString == SidebarView.searchPlaceholder { return f }
             for sub in view.subviews { if let f = find(sub) { return f } }
             return nil
         }
-        if let root = window.contentView?.superview, let field = find(root) {
-            window.makeFirstResponder(field)
-            showResultsPanel = true
+        let item = window?.toolbar?.items.lazy.compactMap { $0 as? NSSearchToolbarItem }.first
+        guard let window, let field = item?.searchField ?? window.contentView?.superview.flatMap(find) else {
+            if attempt < 10 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.focusSearch(attempt: attempt + 1) }
+            }
+            return
+        }
+        window.makeKeyAndOrderFront(nil)
+        if let item { item.beginSearchInteraction() } else { window.makeFirstResponder(field) }
+        DispatchQueue.main.async {
+            if field.currentEditor() == nil { window.makeFirstResponder(field) }
+            field.currentEditor()?.selectAll(nil)
         }
     }
 
