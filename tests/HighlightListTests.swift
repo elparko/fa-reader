@@ -88,3 +88,28 @@ private let sample = [
 
     """)
 }
+
+@Test func applyingOpsMatchesStoreOrderAndReportsPages() {
+    let base = [h("a", page: 3, created: 1), h("b", page: 3, created: 3), h("c", page: 5, created: 2)]
+    let late = h("d", page: 3, created: 2)
+    let added = HighlightList.applying([.add(late)], to: base)
+    #expect(added.highlights.map(\.id) == ["a", "d", "b", "c"])
+    #expect(added.pages == [3])
+
+    let edited = HighlightList.applying([.color(base[0], to: HighlightColor.blue.rawValue), .note(base[2], to: "#x"), .delete(base[1])], to: base)
+    #expect(edited.highlights.map(\.id) == ["a", "c"])
+    #expect(edited.highlights[0].highlightColor == .blue)
+    #expect(edited.highlights[1].note == "#x")
+    #expect(edited.pages == [3, 5])
+
+    let moved = HighlightList.applying([.add(h("a", page: 5, created: 1))], to: base)
+    #expect(moved.pages == [3, 5])
+    #expect(moved.highlights.map(\.id) == ["b", "a", "c"])
+
+    #expect(HighlightList.applying([.delete(h("zz", page: 9))], to: base).highlights == base)
+}
+
+@Test func tagsAreDistinctAndSorted() {
+    let all = [h("a", page: 1, note: "#b #a"), h("b", page: 1, note: "#a x"), h("c", page: 2)]
+    #expect(HighlightList.tags(all) == ["a", "b"])
+}

@@ -53,6 +53,47 @@ public struct HighlightGroup: Identifiable, Equatable {
 }
 
 public enum HighlightList {
+    public static func applying(_ ops: [PendingOp], to all: [Highlight]) -> (highlights: [Highlight], pages: Set<Int>) {
+        var out = all
+        var pages = Set<Int>()
+        var added = false
+        for op in ops {
+            let index = out.firstIndex { $0.id == op.highlight }
+            switch op.kind {
+            case .add:
+                guard let snap = op.snapshot else { continue }
+                if let index {
+                    pages.insert(out[index].page)
+                    out[index] = snap
+                } else {
+                    out.append(snap)
+                }
+                pages.insert(snap.page)
+                added = true
+            case .delete:
+                guard let index else { continue }
+                pages.insert(out[index].page)
+                out.remove(at: index)
+            case .color:
+                guard let index, let color = op.newColor else { continue }
+                out[index].color = color
+                pages.insert(out[index].page)
+            case .note:
+                guard let index, let note = op.newNote else { continue }
+                out[index].note = note
+                pages.insert(out[index].page)
+            }
+        }
+        if added {
+            out.sort { ($0.page, $0.created, $0.id) < ($1.page, $1.created, $1.id) }
+        }
+        return (out, pages)
+    }
+
+    public static func tags(_ all: [Highlight]) -> [String] {
+        Set(all.flatMap(\.tags)).sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+    }
+
     public static func filter(_ all: [Highlight], _ f: HighlightFilter) -> [Highlight] {
         let terms = f.text.split(whereSeparator: { $0.isWhitespace }).map { fold(String($0)) }
         return all.filter { h in

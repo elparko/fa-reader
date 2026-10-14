@@ -582,6 +582,17 @@ final class AppModel: ObservableObject {
         refreshSelected()
     }
 
+    private func reconcile(applying ops: [PendingOp]) {
+        let (all, pages) = HighlightList.applying(ops, to: allHighlights)
+        if allHighlights != all { allHighlights = all }
+        for page in pages {
+            let new = all.filter { $0.page == page }
+            if rendered[page] ?? [] != new { render(page: page, highlights: new) }
+        }
+        tags = HighlightList.tags(all)
+        refreshSelected()
+    }
+
     private func loadPreviewRects() {
         guard let store, let document else { return }
         let ids = (try? store.importedHighlightIDs()) ?? []
@@ -1008,7 +1019,11 @@ final class AppModel: ObservableObject {
             notify("Change failed", info: "\(error)")
             return false
         }
-        reconcile()
+        if let store, let before, store.commitCount == before + 1 {
+            reconcile(applying: store.lastCommitted)
+        } else {
+            reconcile()
+        }
         refreshHistory()
         scheduleExport()
         return true
