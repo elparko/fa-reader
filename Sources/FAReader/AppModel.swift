@@ -370,7 +370,7 @@ final class AppModel: ObservableObject {
 
     private func finishOpen(_ url: URL, loaded: LoadedBook?, completion: (() -> Void)?) {
         guard let loaded else {
-            notify("Cannot open \(url.lastPathComponent)")
+            notify("Cannot open \(url.lastPathComponent)", info: OpenFailure.reason(for: url))
             return
         }
         searchSeq += 1
