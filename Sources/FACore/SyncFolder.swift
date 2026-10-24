@@ -1,6 +1,6 @@
 import Foundation
 
-public struct SyncFolder {
+public struct SyncFolder: Equatable {
     public let root: URL
 
     public init(root: URL) { self.root = root }
