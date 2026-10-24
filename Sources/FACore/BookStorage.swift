@@ -260,7 +260,6 @@ public enum BookOpener {
     }
 
     private static func resolveBookID(contentHash: String, pageCount: Int?, knownBookID: String?, ubiquityContainer: URL?, applicationSupport: URL?) -> String {
-        if holdsData(contentHash, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport) { return contentHash }
         let base: URL
         if let ubiquityContainer {
             base = ubiquityContainer.appendingPathComponent("Documents", isDirectory: true)
@@ -274,8 +273,17 @@ public enum BookOpener {
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let target = object["id"] as? String, target != contentHash,
            holdsData(target, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport) {
+            let destination = SyncFolder(root: BookDataLocator.containerPlace(bookID: target, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport ?? URL(fileURLWithPath: "/unused")).root)
+            var sources = [BookDataLocator.containerPlace(bookID: contentHash, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport ?? URL(fileURLWithPath: "/unused")).root]
+            if ubiquityContainer != nil, let applicationSupport {
+                sources.append(BookDataLocator.containerPlace(bookID: contentHash, ubiquityContainer: nil, applicationSupport: applicationSupport).root)
+            }
+            for source in sources {
+                _ = SidecarMigration.migrate(from: SyncFolder(root: source), to: destination)
+            }
             return target
         }
+        if holdsData(contentHash, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport) { return contentHash }
         guard let known = knownBookID, known != contentHash,
               holdsData(known, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport),
               let pageCount,

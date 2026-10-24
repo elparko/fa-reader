@@ -216,7 +216,7 @@ private func scratch() throws -> URL {
 
 @Test func readerLinkParsesBothSchemes() throws {
     let expected = ReaderLink(page: 5, highlight: "abc", bookID: "bbb", pdfPath: nil)
-    for scheme in ["rowlight", "fa-reader"] {
+    for scheme in ["rowlight", "Rowlight", "fa-reader"] {
         let url = try #require(URL(string: "\(scheme)://open?page=5&highlight=abc&book=bbb"))
         #expect(ReaderLinkResolver.parse(url) == expected)
     }
@@ -419,4 +419,47 @@ private func putLog(_ bookID: String, support: URL) throws {
     try JSONSerialization.data(withJSONObject: ["id": "missing"]).write(to: aliases.appendingPathComponent("\(hash).json"))
     let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
     #expect(opened.bookID == hash)
+}
+
+private func writeAlias(_ hash: String, to target: String, support: URL) throws {
+    let aliases = support.appendingPathComponent("Aliases", isDirectory: true)
+    try FileManager.default.createDirectory(at: aliases, withIntermediateDirectories: true)
+    try JSONSerialization.data(withJSONObject: ["id": target]).write(to: aliases.appendingPathComponent("\(hash).json"))
+}
+
+@Test func aliasWinsOverAHashFolderThatHoldsOnlyBookJSON() throws {
+    let root = try scratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let support = root.appendingPathComponent("Support")
+    let pdf = root.appendingPathComponent("a.pdf")
+    try makePDF(at: pdf, pages: 3)
+    let hash = try BookIdentity.contentHash(of: pdf)
+    try putLog("b-book", support: support)
+    try writeAlias(hash, to: "b-book", support: support)
+    let hashFolder = BookDataLocator.containerPlace(bookID: hash, ubiquityContainer: nil, applicationSupport: support).root
+    try FileManager.default.createDirectory(at: hashFolder, withIntermediateDirectories: true)
+    try Data("{}".utf8).write(to: hashFolder.appendingPathComponent("book.json"))
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    #expect(opened.bookID == "b-book")
+}
+
+@Test func aliasMergesTheHashFolderLogsIntoTheTargetOnce() throws {
+    let root = try scratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let support = root.appendingPathComponent("Support")
+    let pdf = root.appendingPathComponent("a.pdf")
+    try makePDF(at: pdf, pages: 3)
+    let hash = try BookIdentity.contentHash(of: pdf)
+    try putLog("b-book", support: support)
+    try writeAlias(hash, to: "b-book", support: support)
+    let hashFolder = SyncFolder(root: BookDataLocator.containerPlace(bookID: hash, ubiquityContainer: nil, applicationSupport: support).root)
+    try hashFolder.prepare()
+    try hashFolder.append([Data("{\"extra\":1}".utf8)], device: "mac")
+    for _ in 0..<2 {
+        let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+        #expect(opened.bookID == "b-book")
+    }
+    let target = SyncFolder(root: BookDataLocator.containerPlace(bookID: "b-book", ubiquityContainer: nil, applicationSupport: support).root)
+    let text = try String(contentsOf: target.logURL(device: "mac"), encoding: .utf8)
+    #expect(text.components(separatedBy: "{\"extra\":1}").count == 2)
 }

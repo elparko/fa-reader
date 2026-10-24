@@ -89,7 +89,7 @@ public enum MarkdownExporter {
         return .text(text)
     }
 
-    static func coordinated(_ url: URL, options: NSFileCoordinator.WritingOptions, _ body: (URL) throws -> Void) throws {
+    public static func coordinated(_ url: URL, options: NSFileCoordinator.WritingOptions, _ body: (URL) throws -> Void) throws {
         var coordinationError: NSError?
         var thrown: Error?
         NSFileCoordinator().coordinate(writingItemAt: url, options: options, error: &coordinationError) { target in
@@ -144,7 +144,9 @@ public enum MarkdownExporter {
             let url = directory.appendingPathComponent(name)
             var existing: String?
             switch readExisting(at: url) {
-            case .blocked: continue
+            case .blocked:
+                current.insert(name)
+                continue
             case .text(let text): existing = text
             case .missing: break
             }

@@ -34,6 +34,10 @@ final class MarkyView: NSView, NSTextViewDelegate {
         didSet { if baseURL != oldValue { invalidatePreview() } }
     }
 
+    var isReadOnly = false {
+        didSet { editor?.isEditable = !isReadOnly }
+    }
+
     var fontSize: CGFloat = Theme.defaultFontSize {
         didSet { if fontSize != oldValue { fontSizeDidChange() } }
     }
@@ -173,7 +177,7 @@ final class MarkyView: NSView, NSTextViewDelegate {
                                            frame: NSRect(origin: .zero, size: bounds.size))
         let tv = scroll.documentView as! EditorTextView
         let hl = MarkdownHighlighter(fontSize: fontSize)
-        tv.isEditable = true
+        tv.isEditable = !isReadOnly
         tv.isRichText = false
         tv.importsGraphics = false
         tv.allowsUndo = true
