@@ -195,11 +195,11 @@ private func scratch() throws -> URL {
 @Test func linkCarriesTheBookIDAndStillCarriesThePath() {
     let pdf = URL(fileURLWithPath: "/Books/Path oma & co.pdf")
     #expect(MarkdownExporter.link(page: 4, highlight: "abc", pdf: pdf, bookID: "abc123")
-            == "fa-reader://open?page=5&highlight=abc&book=abc123&pdf=/Books/Path%20oma%20%26%20co.pdf")
+            == "rowlight://open?page=5&highlight=abc&book=abc123&pdf=/Books/Path%20oma%20%26%20co.pdf")
     let section = Section(id: 1, title: "Renal", start: 0, end: 9)
     let highlight = Highlight(id: "h1", page: 2, rects: [Rect(x: 0, y: 700, w: 10, h: 10)], text: "RTA", color: .green)
     let text = MarkdownExporter.render(section: section, highlights: [highlight], printedPage: { _ in nil }, pdf: pdf, bookID: "abc123")
-    #expect(text.contains("fa-reader://open?page=3&highlight=h1&book=abc123&pdf=/Books/Path%20oma%20%26%20co.pdf"))
+    #expect(text.contains("rowlight://open?page=3&highlight=h1&book=abc123&pdf=/Books/Path%20oma%20%26%20co.pdf"))
 }
 
 @Test func readerLinkParsesBookIDAndPercentEncodedPath() throws {
@@ -208,6 +208,15 @@ private func scratch() throws -> URL {
     #expect(link == ReaderLink(page: 5, highlight: "abc", bookID: "bbb", pdfPath: "/Books/Path oma & co.pdf"))
     #expect(ReaderLinkResolver.parse(URL(string: "https://example.com")!) == nil)
     #expect(ReaderLinkResolver.parse(URL(string: "fa-reader://open")!) == ReaderLink())
+}
+
+@Test func readerLinkParsesBothSchemes() throws {
+    let expected = ReaderLink(page: 5, highlight: "abc", bookID: "bbb", pdfPath: nil)
+    for scheme in ["rowlight", "fa-reader"] {
+        let url = try #require(URL(string: "\(scheme)://open?page=5&highlight=abc&book=bbb"))
+        #expect(ReaderLinkResolver.parse(url) == expected)
+    }
+    #expect(ReaderLinkResolver.parse(URL(string: "other://open?page=5")!) == nil)
 }
 
 @Test func readerLinkPrefersBookIDThenPathAndSkipsTheOpenBook() {

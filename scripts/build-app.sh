@@ -28,6 +28,7 @@ build=$(git rev-list --count HEAD 2>/dev/null || echo 0)
   -c "Set :CFBundleVersion $build" \
   -c "Set :NSHumanReadableCopyright $copyright" \
   -c "Set :CFBundleURLTypes:0:CFBundleURLName $bundle" \
+  -c "Add :FAUpdateRepo string elparko/fa-reader" \
   "$app/Contents/Info.plist"
 codesign --force --sign - "$app"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"

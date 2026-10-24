@@ -334,7 +334,7 @@ final class SelfCheck {
         check("re-export changes nothing", second?.written.isEmpty == true && second?.unchanged.count == files.count)
         if let gi = files.first(where: { $0.contains("Gastrointestinal") }),
            let text = try? String(contentsOf: exportDir.appendingPathComponent(gi), encoding: .utf8) {
-            check("export has page links", text.contains("fa-reader://open?page="), String(text.prefix(600)))
+            check("export has page links", text.contains("rowlight://open?page="), String(text.prefix(600)))
         }
 
         model.handle(url: URL(string: "fa-reader://open?page=413")!)

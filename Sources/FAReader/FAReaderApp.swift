@@ -32,14 +32,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 #if DEBUG
         let headless = AppModel.shared.selfCheck != nil || AppModel.shared.measureOpen
 #else
-        let headless = AppModel.shared.measureOpen
+        let headless = false
 #endif
         if headless {
             NSApp.setActivationPolicy(.accessory)
+#if DEBUG
             for window in NSApp.windows where !CommandLine.arguments.contains("--visible") {
                 window.alphaValue = 0
                 window.ignoresMouseEvents = true
             }
+#endif
         } else {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
@@ -147,6 +149,14 @@ struct AppCommands: Commands {
                 .disabled(model.results.isEmpty)
             Button("Previous Result") { model.moveResult(-1) }.keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(model.results.isEmpty)
+        }
+        CommandGroup(replacing: .help) {
+            Button("Rowlight Support") {
+                NSWorkspace.shared.open(URL(string: "https://www.elparko.com/apps/rowlight/support/")!)
+            }
+            Button("Privacy Policy") {
+                NSWorkspace.shared.open(URL(string: "https://www.elparko.com/apps/rowlight/privacy/")!)
+            }
         }
     }
 }

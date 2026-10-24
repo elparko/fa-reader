@@ -194,7 +194,7 @@ Every push to `main` on GitHub (`elparko/fa-reader`, public) runs the tests, bui
 
 ## App Store
 
-Open `FAReader.xcodeproj` (not the Swift package). The app target links the `FACore` and `md4c` packages, sandboxed, with automatic signing. The display name lives in `Config/Brand.xcconfig` (`PRODUCT_NAME`) and is **Rowlight**. In App Store Connect, set the listing name to **Rowlight: PDF Highlighter**. The name under the icon stays Rowlight. Marketing version is `MARKETING_VERSION` (1.0). Bump `CURRENT_PROJECT_VERSION` for each upload. `make app` stays the unsandboxed direct-download build. That build's file on disk is still `FA Reader.app`, so an already-installed copy can update itself. Finder shows Rowlight because the bundle display name comes from `PRODUCT_NAME`.
+Open `FAReader.xcodeproj` (not the Swift package). The app target links the `FACore` and `md4c` packages, sandboxed, with automatic signing. The display name lives in `Config/Brand.xcconfig` (`PRODUCT_NAME`) and is **Rowlight**. In App Store Connect, set the listing name to **Rowlight: PDF Highlighter**. The name under the icon stays Rowlight. Marketing version is `MARKETING_VERSION` (1.0.0). Bump `CURRENT_PROJECT_VERSION` for each upload. `make app` stays the unsandboxed direct-download build. That build's file on disk is still `FA Reader.app`, so an already-installed copy can update itself. Finder shows Rowlight because the bundle display name comes from `PRODUCT_NAME`.
 
 The bundle ID stays `com.parkersmith.fa-reader`. It is already the direct-download app's identity (bookmarks, preferences, and the updater). Changing it before the first upload would make the App Store app a different app from the one people already run.
 
