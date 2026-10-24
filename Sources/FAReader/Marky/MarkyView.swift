@@ -272,20 +272,26 @@ final class MarkyView: NSView, NSTextViewDelegate {
     }
 
     private func render() {
+#if DEBUG
         let start = CACurrentMediaTime()
+#endif
         let width = preview.contentWidth
         let result = MarkdownRenderer.render(text, baseURL: baseURL, fontSize: fontSize, maxImageWidth: width)
+#if DEBUG
         let built = CACurrentMediaTime()
+#endif
         let y = previewScroll.contentView.bounds.origin.y
         preview.textStorage?.setAttributedString(result.text)
         anchors = result.anchors
         renderedVersion = version
         renderedWidth = width
         if y > 0 { restorePreviewScroll(y) }
+#if DEBUG
         if Debug.trace {
             NSLog("render: parse+build %.1fms, layout %.1fms (%d chars)",
                   (built - start) * 1000, (CACurrentMediaTime() - built) * 1000, result.text.length)
         }
+#endif
         if !result.pendingImages.isEmpty {
             ImageStore.shared.fetch(result.pendingImages) { [weak self] in self?.render() }
         }

@@ -33,10 +33,10 @@ private func read(_ dir: URL, _ name: String) throws -> String {
 }
 
 @Test func linkFormat() {
-    #expect(MarkdownExporter.link(page: 366) == "fa-reader://open?page=367")
-    #expect(MarkdownExporter.link(page: 0, highlight: "abc") == "fa-reader://open?page=1&highlight=abc")
+    #expect(MarkdownExporter.link(page: 366) == "rowlight://open?page=367")
+    #expect(MarkdownExporter.link(page: 0, highlight: "abc") == "rowlight://open?page=1&highlight=abc")
     #expect(MarkdownExporter.link(page: 4, highlight: "abc", pdf: URL(fileURLWithPath: "/Books/Path oma & co.pdf"))
-            == "fa-reader://open?page=5&highlight=abc&pdf=/Books/Path%20oma%20%26%20co.pdf")
+            == "rowlight://open?page=5&highlight=abc&pdf=/Books/Path%20oma%20%26%20co.pdf")
 }
 
 @Test func fileNameSanitizing() {
@@ -67,7 +67,7 @@ private func read(_ dir: URL, _ name: String) throws -> String {
         <!-- fa-reader:highlights:start -->
 
         ## PDF p. 3
-        - ==Papillary carcinoma: most prevalent== (pink) [open](fa-reader://open?page=3&highlight=a1) <!-- fa:a1 -->
+        - ==Papillary carcinoma: most prevalent== (pink) [open](rowlight://open?page=3&highlight=a1) <!-- fa:a1 -->
           > line 1
           > line 2
 
@@ -82,7 +82,7 @@ private func read(_ dir: URL, _ name: String) throws -> String {
     #expect(endo.contains("section: \"Endocrine / Diabetes: notes\"\n"))
     #expect(endo.contains("pdf-pages: 11-20\nhighlights: 3\n"))
     #expect(endo.contains("## p. 346 (PDF 13)\n"))
-    #expect(endo.contains("## PDF p. 16\n- Note: remember this [open](fa-reader://open?page=16&highlight=b3) <!-- fa:b3 -->\n"))
+    #expect(endo.contains("## PDF p. 16\n- Note: remember this [open](rowlight://open?page=16&highlight=b3) <!-- fa:b3 -->\n"))
 
     let heme = try read(dir, "02 Hematology.md")
     #expect(!heme.contains("parent:"))

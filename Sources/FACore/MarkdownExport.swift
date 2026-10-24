@@ -10,7 +10,7 @@ public enum MarkdownExporter {
     public static let marker = "fa-reader-export: 1"
 
     public static func link(page: Int, highlight: String? = nil, pdf: URL? = nil, bookID: String? = nil) -> String {
-        var s = "fa-reader://open?page=\(page + 1)"
+        var s = "rowlight://open?page=\(page + 1)"
         if let highlight { s += "&highlight=\(highlight)" }
         if let bookID, let id = bookID.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) {
             s += "&book=\(id)"

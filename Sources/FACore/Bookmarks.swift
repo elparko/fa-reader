@@ -81,7 +81,7 @@ public struct ReaderLink: Equatable {
 
 public enum ReaderLinkResolver {
     public static func parse(_ url: URL) -> ReaderLink? {
-        guard url.scheme == "fa-reader" else { return nil }
+        guard let scheme = url.scheme, scheme == "rowlight" || scheme == "fa-reader" else { return nil }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         return ReaderLink(page: value("page").flatMap(Int.init), highlight: value("highlight"), bookID: value("book"), pdfPath: value("pdf"))

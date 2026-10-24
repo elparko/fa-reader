@@ -247,23 +247,27 @@ final class AppModel: ObservableObject {
     private var searchInFlight = false
     private var queuedSearchActions: [@MainActor () -> Void] = []
     private var started = false
+#if DEBUG
     private var openReported = false
     fileprivate var searchReported = false
+#endif
     private var timer: Timer?
     private let arguments = CommandLine.arguments
 #if DEBUG
     var selfCheck: SelfCheck?
 #endif
 
+#if DEBUG
     var measureOpen: Bool { arguments.contains("--measure-open") }
+    private var exitAfterMeasure: Bool { arguments.contains("--exit") }
+#endif
     var isTestRun: Bool {
 #if DEBUG
         measureOpen || selfCheck != nil
 #else
-        measureOpen
+        false
 #endif
     }
-    private var exitAfterMeasure: Bool { arguments.contains("--exit") }
 
     private init() {
         pdfView.configure()
@@ -291,10 +295,6 @@ final class AppModel: ObservableObject {
             selfCheck = SelfCheck(report: URL(fileURLWithPath: arguments[i + 1]))
         }
         if measureOpen || selfCheck != nil {
-            pdfView.onFirstDraw = { [weak self] in self?.reportOpenTime() }
-        }
-#else
-        if measureOpen {
             pdfView.onFirstDraw = { [weak self] in self?.reportOpenTime() }
         }
 #endif
@@ -334,9 +334,13 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.sync() }
         }
         restoreExportFolder()
+#if DEBUG
         if let i = arguments.firstIndex(of: "--pdf"), i + 1 < arguments.count {
             open(URL(fileURLWithPath: arguments[i + 1]))
-        } else if let restored = restoredLastBook() {
+            return
+        }
+#endif
+        if let restored = restoredLastBook() {
             open(restored.url, knownBookmark: restored.bookmark, knownBookID: restored.bookID)
         }
     }
@@ -601,6 +605,7 @@ final class AppModel: ObservableObject {
 
     /// Once, the first time a sandboxed book has no highlights and its old sidecar could not be read on its own.
     private func maybeOfferSidecarImport(_ report: SidecarMigrationReport) {
+#if !APPSTORE
         guard AppSandbox.isActive, !isTestRun, store != nil else { return }
         guard report.copiedLogs.isEmpty, report.copiedMarkdown.isEmpty else { return }
         guard ((try? store?.highlights()) ?? []).isEmpty else { return }
@@ -613,6 +618,7 @@ final class AppModel: ObservableObject {
         alert.addButton(withTitle: "Choose Folder…")
         alert.addButton(withTitle: "Not Now")
         if alert.runModal() == .alertFirstButtonReturn { importSidecarFolder() }
+#endif
     }
 
     private func clearRendered() {
@@ -624,6 +630,7 @@ final class AppModel: ObservableObject {
 
     // MARK: Timing
 
+#if DEBUG
     private func processStartMs() -> Double {
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
@@ -674,6 +681,7 @@ final class AppModel: ObservableObject {
             }
         }
     }
+#endif
 
     // MARK: Book index
 
@@ -698,7 +706,9 @@ final class AppModel: ObservableObject {
                     model.indexProgress = nil
                     model.printedCache = [:]
                     model.updatePageLabel()
+#if DEBUG
                     model.runSearchMeasurement()
+#endif
                 }
             }
         }
@@ -1375,11 +1385,13 @@ final class AppModel: ObservableObject {
         pdfView.clearSelection()
     }
 
+#if DEBUG
     func abandonSearch() {
         searchSeq += 1
         searchInFlight = false
         queuedSearchActions = []
     }
+#endif
 
     private func deferUntilSearchDone(_ action: @escaping @MainActor () -> Void) -> Bool {
         if searchWork != nil {
@@ -1843,7 +1855,7 @@ extension AppModel {
         m.mode = MarkyView.Mode(rawValue: notesMode) ?? .preview
         m.onTextChange = { [weak self] in self?.notesChanged() }
         m.openURL = { [weak self] url in
-            guard url.scheme == "fa-reader" else { return false }
+            guard url.scheme == "rowlight" || url.scheme == "fa-reader" else { return false }
             self?.handle(url: url)
             return true
         }

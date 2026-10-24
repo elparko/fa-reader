@@ -5,6 +5,6 @@
 // installed can still update. Resources/Info.plist substitutes these build settings.
 PRODUCT_NAME = Rowlight
 PRODUCT_BUNDLE_IDENTIFIER = com.parkersmith.fa-reader
-MARKETING_VERSION = 1.0
+MARKETING_VERSION = 1.0.0
 CURRENT_PROJECT_VERSION = 1
 FA_COPYRIGHT = Copyright 2026 Parker Smith
