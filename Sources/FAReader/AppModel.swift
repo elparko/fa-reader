@@ -439,7 +439,8 @@ final class AppModel: ObservableObject {
         } catch {
             stopScope(scope)
             NSLog("Cannot open the annotation store: \(error)")
-            notify("Cannot open the annotation store", info: "The annotation file could not be read. Close the book and open it again.")
+            let info = (error as? DatabaseError)?.description ?? "The annotation file could not be read. Close the book and open it again."
+            notify("Cannot open the annotation store", info: info)
             return
         }
         searchSeq += 1
@@ -1787,23 +1788,37 @@ final class AppModel: ObservableObject {
     }
 
     func exportMarkdown() {
-        guard let store, let dir = exportDirectory else { return }
-        do {
-            let result = try MarkdownExporter.export(store: store, sections: sections, to: dir, printedPage: { page in
-                try? BookIndex.printedPage(db: store.db, page: page)
-            }, pdf: pdfURL, bookID: currentBookID)
-            let alert = NSAlert()
-            alert.messageText = "Markdown exported"
-            alert.informativeText = "\(result.written.count) written, \(result.unchanged.count) unchanged, \(result.removed.count) removed\n\(dir.path)"
-            alert.addButton(withTitle: "OK")
-            alert.addButton(withTitle: "Show in Finder")
-            if alert.runModal() == .alertSecondButtonReturn {
-                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                NSWorkspace.shared.activateFileViewerSelecting([dir])
+        guard store != nil, let dir = exportDirectory else { return }
+        saveNotes()
+        let highlights = allHighlights, sections = sections, pdf = pdfURL, bookID = currentBookID
+        var printedPages: [Int: String] = [:]
+        for page in Set(highlights.map(\.page)) { printedPages[page] = printed(page) }
+        let scope = exportScope.flatMap { startScope($0.url) }
+        folderQueue.async {
+            let outcome = Result {
+                try MarkdownExporter.export(highlights: highlights, sections: sections, to: dir, printedPage: { printedPages[$0] }, pdf: pdf, bookID: bookID)
             }
-        } catch {
-            NSLog("Rowlight markdown export failed: %@", "\(error)")
-            notify("Export failed", info: "Rowlight could not save the notes file.")
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let model = AppModel.shared
+                    model.stopScope(scope)
+                    switch outcome {
+                    case .success(let result):
+                        let alert = NSAlert()
+                        alert.messageText = "Markdown exported"
+                        alert.informativeText = "\(result.written.count) written, \(result.unchanged.count) unchanged, \(result.removed.count) removed\n\(dir.path)"
+                        alert.addButton(withTitle: "OK")
+                        alert.addButton(withTitle: "Show in Finder")
+                        if alert.runModal() == .alertSecondButtonReturn {
+                            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                            NSWorkspace.shared.activateFileViewerSelecting([dir])
+                        }
+                    case .failure(let error):
+                        NSLog("Rowlight markdown export failed: %@", "\(error)")
+                        model.notify("Export failed", info: "Rowlight could not save the notes file.")
+                    }
+                }
+            }
         }
     }
 }
