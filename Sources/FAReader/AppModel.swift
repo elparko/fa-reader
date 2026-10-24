@@ -168,6 +168,8 @@ final class AppModel: ObservableObject {
     private(set) var notesURL: URL?
     private var notesSectionID: Int?
     private(set) var notesBlocked = false
+    private(set) var notesLoading = false
+    private var notesLoadToken = 0
     private var notesDirty = false
     private var notesSaveWork: DispatchWorkItem?
     private var exportWork: DispatchWorkItem?
@@ -1202,13 +1204,12 @@ final class AppModel: ObservableObject {
     /// Merges overlapping highlights and widens partial words on every page, as one change that Cmd+Z undoes.
     func tidyHighlights() {
         guard tidyTask == nil, let store, let url = pdfURL else { return }
-        let token = openToken
         let highlights = (try? store.highlights()) ?? []
         tidyTask = Task { @MainActor [weak self] in
             let found = await Task.detached(priority: .userInitiated) { TidyPlanner.plan(url: url, highlights: highlights) }.value
             guard let self else { return }
             tidyTask = nil
-            guard self.store === store, openToken == token else { return }
+            guard self.store === store else { return }
             guard let plan = found else {
                 notify("Could not tidy", info: "Rowlight could not read this PDF.")
                 return
@@ -1722,7 +1723,6 @@ final class AppModel: ObservableObject {
 
     func beginImport() {
         guard let startStore = store, let url = pdfURL else { return }
-        let token = openToken
         importPreview = nil
         importFailure = nil
         showImport = true
@@ -1732,7 +1732,7 @@ final class AppModel: ObservableObject {
                 return
             }
             let scanned = await Task.detached(priority: .userInitiated) { PreviewImporter.scan(fresh) }.value
-            guard showImport, let store, store === startStore, openToken == token else {
+            guard showImport, let store, store === startStore else {
                 if showImport { importFailure = "The book changed while Rowlight scanned it. Close this window and choose Import again." }
                 return
             }
@@ -1904,81 +1904,122 @@ extension AppModel {
 
     func saveNotes() {
         notesSaveWork?.cancel()
-        guard notesDirty, !notesBlocked, let url = notesURL else { return }
+        guard notesDirty, !notesBlocked, !notesLoading, let url = notesURL else { return }
         notesDirty = false
         writeNotes(Data(marky.text.utf8), to: url)
     }
 
     private func writeNotes(_ data: Data, to url: URL) {
-        folderQueue.async { [weak self] in
-            do {
-                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try MarkdownExporter.coordinated(url, options: .forReplacing) { try data.write(to: $0, options: .atomic) }
-            } catch {
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated { self?.notify("Could not save notes", info: "\(error.localizedDescription)") }
-                }
+        folderQueue.async { [weak self] in Self.writeNotesFile(data, to: url, model: self) }
+    }
+
+    private nonisolated static func writeNotesFile(_ data: Data, to url: URL, model: AppModel?) {
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try MarkdownExporter.coordinated(url, options: .forReplacing) { try data.write(to: $0, options: .atomic) }
+        } catch {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { model?.notify("Could not save notes", info: "\(error.localizedDescription)") }
             }
         }
+    }
+
+    private func beginNotesLoad() -> Int {
+        saveNotes()
+        notesLoadToken += 1
+        notesLoading = true
+        marky.isReadOnly = true
+        return notesLoadToken
+    }
+
+    private func endNotesLoad() {
+        notesLoading = false
+        marky.isReadOnly = notesBlocked
     }
 
     func refreshNotes(force: Bool = false) {
         guard notesShown, let store, let dir = exportDirectory else { return }
         let section = Sections.section(for: currentPageIndex, in: sections)
         guard force || section?.id != notesSectionID else { return }
-        saveNotes()
-        folderQueue.sync {}
-        notesSectionID = section?.id
+        let token = beginNotesLoad()
         notesBlocked = false
-        marky.isReadOnly = false
         guard let section else {
+            notesSectionID = nil
             notesURL = nil
             notesTitle = "Notes"
             marky.text = ""
+            endNotesLoad()
             return
         }
         let url = dir.appendingPathComponent(MarkdownExporter.fileName(for: section))
-        var existing: String?
-        switch MarkdownExporter.readExisting(at: url) {
-        case .blocked:
-            NSLog("Rowlight notes file is unreadable or not downloaded: %@", url.path)
-            notesURL = nil
-            notesBlocked = true
-            marky.isReadOnly = true
-            notesSectionID = nil
-            notesDirty = false
-            notesTitle = section.title
-            if !marky.text.isEmpty { marky.text = "" }
-            return
-        case .text(let content): existing = content
-        case .missing: break
-        }
-        var text = existing ?? ""
-        if existing == nil || existing.map(MarkdownExporter.hasMarker) == true {
-            let highlights = ((try? store.highlights()) ?? []).filter { section.pages.contains($0.page) }
-            if let merged = MarkdownExporter.merge(existing: existing, section: section, highlights: highlights,
-                                                   printedPage: { [weak self] in self?.printed($0) }, pdf: pdfURL, bookID: currentBookID) {
-                text = merged
-                if existing != nil, existing != text { writeNotes(Data(text.utf8), to: url) }
+        let highlights = ((try? store.highlights()) ?? []).filter { section.pages.contains($0.page) }
+        var labels: [Int: String] = [:]
+        for page in section.pages { if let label = printed(page) { labels[page] = label } }
+        let pdf = pdfURL, bookID = currentBookID
+        folderQueue.async { [weak self] in
+            var text = ""
+            var blocked = false
+            switch MarkdownExporter.readExisting(at: url) {
+            case .blocked:
+                blocked = true
+            case .text(let content):
+                text = content
+                if MarkdownExporter.hasMarker(content),
+                   let merged = MarkdownExporter.merge(existing: content, section: section, highlights: highlights,
+                                                       printedPage: { labels[$0] }, pdf: pdf, bookID: bookID) {
+                    text = merged
+                    if merged != content { Self.writeNotesFile(Data(merged.utf8), to: url, model: self) }
+                }
+            case .missing:
+                if let merged = MarkdownExporter.merge(existing: nil, section: section, highlights: highlights,
+                                                       printedPage: { labels[$0] }, pdf: pdf, bookID: bookID) {
+                    text = merged
+                }
+            }
+            let result = (text, blocked)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.notesLoadToken == token else { return }
+                    if result.1 {
+                        NSLog("Rowlight notes file is unreadable or not downloaded: %@", url.path)
+                        self.notesURL = nil
+                        self.notesBlocked = true
+                        self.notesSectionID = nil
+                        self.notesDirty = false
+                        self.notesTitle = section.title
+                        if !self.marky.text.isEmpty { self.marky.text = "" }
+                    } else {
+                        self.notesBlocked = false
+                        self.notesSectionID = section.id
+                        self.notesURL = url
+                        self.notesTitle = section.title
+                        self.marky.baseURL = dir
+                        if self.marky.text != result.0 { self.marky.text = result.0 }
+                    }
+                    self.endNotesLoad()
+                }
             }
         }
-        notesURL = url
-        notesTitle = section.title
-        marky.baseURL = dir
-        if marky.text != text { marky.text = text }
     }
 
     func showNotesFile(_ file: URL) {
-        saveNotes()
-        folderQueue.sync {}
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else { beep(); return }
-        notesBlocked = false
-        marky.isReadOnly = false
-        notesURL = file
-        notesSectionID = -1
-        notesTitle = file.deletingPathExtension().lastPathComponent
-        marky.baseURL = file.deletingLastPathComponent()
-        marky.text = text
+        let token = beginNotesLoad()
+        folderQueue.async { [weak self] in
+            let text = try? String(contentsOf: file, encoding: .utf8)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.notesLoadToken == token else { return }
+                    defer { self.endNotesLoad() }
+                    guard let text else { self.beep(); return }
+                    self.notesBlocked = false
+                    self.notesURL = file
+                    self.notesSectionID = -1
+                    self.notesTitle = file.deletingPathExtension().lastPathComponent
+                    self.marky.baseURL = file.deletingLastPathComponent()
+                    self.marky.text = text
+                }
+            }
+        }
     }
 
     func revealNotes() {

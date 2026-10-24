@@ -62,7 +62,7 @@ private func scratch() throws -> URL {
     try Data("OLD".utf8).write(to: sidecar.databaseURL)
 
     let support = root.appendingPathComponent("Support", isDirectory: true)
-    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac")
     let hash = try BookIdentity.contentHash(of: pdf)
     let expected = BookDataLocator.place(pdfURL: pdf, bookID: hash, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
     #expect(opened.bookID == hash)
@@ -80,11 +80,11 @@ private func scratch() throws -> URL {
     #expect(identity?["file"] == "Guide.pdf")
 
     try Data("changed\n".utf8).write(to: opened.folder.logURL(device: "other"))
-    let again = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    let again = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac")
     #expect(again.migration.destinationHadLogs)
     #expect(again.migration.copiedLogs == ["other.jsonl"])
     #expect(try String(contentsOf: again.folder.logURL(device: "other"), encoding: .utf8) == "changed\nnot-json\n")
-    let third = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    let third = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac")
     #expect(third.migration.copiedLogs.isEmpty)
     #expect(try String(contentsOf: third.folder.logURL(device: "other"), encoding: .utf8) == "changed\nnot-json\n")
 
@@ -99,7 +99,7 @@ private func scratch() throws -> URL {
     let pdf = root.appendingPathComponent("Guide.pdf")
     try Data("pdf-bytes".utf8).write(to: pdf)
     let ubi = root.appendingPathComponent("Ubiquity", isDirectory: true)
-    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: ubi, applicationSupport: root.appendingPathComponent("Support"))
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: ubi, applicationSupport: root.appendingPathComponent("Support"), device: "mac")
     let hash = try #require(opened.bookID)
     let expected = BookDataLocator.containerPlace(bookID: hash, ubiquityContainer: ubi, applicationSupport: root.appendingPathComponent("Support"))
     #expect(opened.place.root.path == expected.root.path)
@@ -112,18 +112,18 @@ private func scratch() throws -> URL {
     let pdf = root.appendingPathComponent("Guide.pdf")
     try Data("pdf-bytes".utf8).write(to: pdf)
     let support = root.appendingPathComponent("Support", isDirectory: true)
-    let first = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    let first = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac")
     try Data("local-log\n".utf8).write(to: first.folder.logURL(device: "mac"))
     try FileManager.default.createDirectory(at: first.folder.markdownURL, withIntermediateDirectories: true)
     try Data("note".utf8).write(to: first.folder.markdownURL.appendingPathComponent("01.md"))
 
     let ubi = root.appendingPathComponent("Ubiquity", isDirectory: true)
-    let second = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: ubi, applicationSupport: support)
+    let second = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: ubi, applicationSupport: support, device: "mac")
     #expect(second.migration.copiedLogs == ["mac.jsonl"])
     #expect(second.migration.copiedMarkdown == ["01.md"])
     #expect(try String(contentsOf: second.folder.logURL(device: "mac"), encoding: .utf8) == "local-log\n")
     #expect(second.folder.root.path != first.folder.root.path)
-    let third = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: ubi, applicationSupport: support)
+    let third = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: ubi, applicationSupport: support, device: "mac")
     #expect(third.migration.copiedLogs.isEmpty)
     #expect(try String(contentsOf: third.folder.logURL(device: "mac"), encoding: .utf8) == "local-log\n")
 }
@@ -133,7 +133,7 @@ private func scratch() throws -> URL {
     defer { try? FileManager.default.removeItem(at: root) }
     let pdf = root.appendingPathComponent("Guide.pdf")
     try Data("pdf-bytes".utf8).write(to: pdf)
-    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: false, ubiquityContainer: root.appendingPathComponent("Ubiquity"), applicationSupport: root.appendingPathComponent("Support"))
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: false, ubiquityContainer: root.appendingPathComponent("Ubiquity"), applicationSupport: root.appendingPathComponent("Support"), device: "mac")
     #expect(opened.bookID == nil)
     #expect(opened.folder.root.path == SyncFolder(pdfURL: pdf).root.path)
     #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Ubiquity").path))
@@ -188,7 +188,7 @@ private func scratch() throws -> URL {
     let pdf = root.appendingPathComponent("Guide.pdf")
     try Data("x".utf8).write(to: pdf)
     do {
-        _ = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: nil)
+        _ = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: nil, device: "mac")
         Issue.record("expected a missing Application Support error")
     } catch is BookStoreError {
     } catch {
@@ -365,16 +365,16 @@ private func putLog(_ bookID: String, support: URL) throws {
     let support = root.appendingPathComponent("Support")
     let pdf = root.appendingPathComponent("a.pdf")
     try makePDF(at: pdf, pages: 3)
-    let first = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    let first = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac")
     let a = try #require(first.bookID)
     try putLog(a, support: support)
     try annotate(pdf)
     let edited = try BookIdentity.contentHash(of: pdf)
     #expect(edited != a)
-    let second = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, knownBookID: a)
+    let second = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, knownBookID: a, device: "mac")
     #expect(second.bookID == a)
     #expect(FileManager.default.fileExists(atPath: support.appendingPathComponent("Aliases/\(edited).json").path))
-    let otherMac = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    let otherMac = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac")
     #expect(otherMac.bookID == a)
 }
 
@@ -384,11 +384,11 @@ private func putLog(_ bookID: String, support: URL) throws {
     let support = root.appendingPathComponent("Support")
     let pdf = root.appendingPathComponent("a.pdf")
     try makePDF(at: pdf, pages: 3)
-    let a = try #require(try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support).bookID)
+    let a = try #require(try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac").bookID)
     try putLog(a, support: support)
     try makePDF(at: pdf, pages: 5)
     let hash = try BookIdentity.contentHash(of: pdf)
-    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, knownBookID: a)
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, knownBookID: a, device: "mac")
     #expect(opened.bookID == hash)
 }
 
@@ -398,12 +398,12 @@ private func putLog(_ bookID: String, support: URL) throws {
     let support = root.appendingPathComponent("Support")
     let pdf = root.appendingPathComponent("a.pdf")
     try makePDF(at: pdf, pages: 3)
-    let a = try #require(try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support).bookID)
+    let a = try #require(try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac").bookID)
     try putLog(a, support: support)
     try annotate(pdf)
     let hash = try BookIdentity.contentHash(of: pdf)
     try putLog(hash, support: support)
-    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, knownBookID: a)
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, knownBookID: a, device: "mac")
     #expect(opened.bookID == hash)
 }
 
@@ -417,7 +417,7 @@ private func putLog(_ bookID: String, support: URL) throws {
     let aliases = support.appendingPathComponent("Aliases", isDirectory: true)
     try FileManager.default.createDirectory(at: aliases, withIntermediateDirectories: true)
     try JSONSerialization.data(withJSONObject: ["id": "missing"]).write(to: aliases.appendingPathComponent("\(hash).json"))
-    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac")
     #expect(opened.bookID == hash)
 }
 
@@ -439,7 +439,7 @@ private func writeAlias(_ hash: String, to target: String, support: URL) throws 
     let hashFolder = BookDataLocator.containerPlace(bookID: hash, ubiquityContainer: nil, applicationSupport: support).root
     try FileManager.default.createDirectory(at: hashFolder, withIntermediateDirectories: true)
     try Data("{}".utf8).write(to: hashFolder.appendingPathComponent("book.json"))
-    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac")
     #expect(opened.bookID == "b-book")
 }
 
