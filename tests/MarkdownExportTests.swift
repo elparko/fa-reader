@@ -56,7 +56,7 @@ private func read(_ dir: URL, _ name: String) throws -> String {
     let bio = try read(dir, "00 Biochemistry.md")
     #expect(bio == """
         ---
-        fa-reader-export: 1
+        rowlight-export: 1
         section: "Biochemistry"
         parent: "Section III: High-Yield Organ Systems"
         pdf-pages: 1-10
@@ -86,6 +86,40 @@ private func read(_ dir: URL, _ name: String) throws -> String {
 
     let heme = try read(dir, "02 Hematology.md")
     #expect(!heme.contains("parent:"))
+}
+
+@Test func oldKeyFileMergesKeepsNotesAndGetsNewKey() throws {
+    let store = try makeStore()
+    let dir = outputDir()
+    let name = MarkdownExporter.fileName(for: testSections[0])
+    let old = """
+        ---
+        fa-reader-export: 1
+        section: "Old title"
+        tags: mine
+        highlights: 0
+        ---
+        # Old title
+
+        <!-- fa-reader:highlights:start -->
+        <!-- fa-reader:highlights:end -->
+
+        ## Notes
+
+        my own words
+
+        """
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try old.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+    let result = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    #expect(result.written.contains(name))
+    let text = try read(dir, name)
+    #expect(text.hasPrefix("---\nrowlight-export: 1\n"))
+    #expect(!text.contains("fa-reader-export"))
+    #expect(text.contains("tags: mine\n"))
+    #expect(text.contains("section: \"Biochemistry\"\n"))
+    #expect(text.contains("my own words\n"))
+    #expect(text.contains("fa:a1"))
 }
 
 @Test func reExportIsStable() throws {

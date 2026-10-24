@@ -7,7 +7,9 @@ public struct ExportResult: Equatable {
 }
 
 public enum MarkdownExporter {
-    public static let marker = "fa-reader-export: 1"
+    public static let marker = "rowlight-export: 1"
+    static let oldMarker = "fa-reader-export: 1"
+    private static let generatedKeys: Set<String> = ["book", "section", "parent", "pdf-pages", "highlights"]
 
     public static func link(page: Int, highlight: String? = nil, pdf: URL? = nil, bookID: String? = nil) -> String {
         var s = "rowlight://open?page=\(page + 1)"
@@ -45,7 +47,9 @@ public enum MarkdownExporter {
         out += "section: \(quoted(section.title))\n"
         if let parent = section.parent { out += "parent: \(quoted(parent))\n" }
         out += "pdf-pages: \(section.start + 1)-\(section.end + 1)\n"
-        out += "highlights: \(highlights.count)\n---\n"
+        out += "highlights: \(highlights.count)\n"
+        if let existing { for extra in extraFrontMatter(existing) { out += extra + "\n" } }
+        out += "---\n"
 
         var block = blockStart + "\n"
         let byPage = Dictionary(grouping: highlights, by: \.page)
@@ -105,6 +109,18 @@ public enum MarkdownExporter {
             return !t.isEmpty && !t.hasPrefix("# ") && t != notesHeading
         }
         return !rest.isEmpty
+    }
+
+    private static func extraFrontMatter(_ text: String) -> [String] {
+        guard text.hasPrefix("---\n") else { return [] }
+        var extras: [String] = []
+        for l in text.split(separator: "\n", omittingEmptySubsequences: false).dropFirst() {
+            if l == "---" { break }
+            if l == Substring(marker) || l == Substring(oldMarker) { continue }
+            if let key = l.split(separator: ":", maxSplits: 1).first, generatedKeys.contains(String(key)) { continue }
+            extras.append(String(l))
+        }
+        return extras
     }
 
     private static func body(_ text: String) -> Substring {
@@ -178,7 +194,7 @@ public enum MarkdownExporter {
         guard lines.first == "---" else { return false }
         for l in lines.dropFirst() {
             if l == "---" { return false }
-            if l == Substring(marker) { return true }
+            if l == Substring(marker) || l == Substring(oldMarker) { return true }
         }
         return false
     }
