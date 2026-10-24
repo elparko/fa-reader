@@ -318,3 +318,31 @@ private let renalSection = Section(id: 1, title: "Renal", start: 0, end: 9)
     #expect(result.written.isEmpty)
     #expect(result.removed.isEmpty)
 }
+
+@Test func fileWithOnlyAnExtraFrontMatterKeyIsNeitherRewrittenNorDeleted() throws {
+    let dir = outputDir()
+    let section = Section(id: 2, title: "Hematology", start: 20, end: 29)
+    let first = MarkdownExporter.render(section: section, highlights: [], printedPage: { _ in nil })
+    let text = first.replacingOccurrences(of: "highlights: 0\n", with: "highlights: 0\ntags: [a]\n")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("02 Hematology.md")
+    try text.write(to: url, atomically: true, encoding: .utf8)
+    let result = try MarkdownExporter.export(highlights: [], sections: [section], to: dir)
+    #expect(result.removed.isEmpty && result.written.isEmpty && result.unchanged == ["02 Hematology.md"])
+    #expect(try String(contentsOf: url, encoding: .utf8) == text)
+    let again = try MarkdownExporter.export(highlights: [], sections: [section], to: dir)
+    #expect(again.written.isEmpty)
+    #expect(try String(contentsOf: url, encoding: .utf8) == text)
+}
+
+@Test func userParentKeyInTopLevelSectionSurvivesAndQuotedBookKeyIsNotDuplicated() {
+    let section = Section(id: 2, title: "Hematology", start: 20, end: 29)
+    let existing = "---\nrowlight-export: 1\nparent: mine\n\"book\": x\nbook : y\nsection: \"Hematology\"\n---\n" + MarkdownExporter.blockStart + "\n" + MarkdownExporter.blockEnd + "\n"
+    let pdf = URL(fileURLWithPath: "/tmp/First Aid.pdf")
+    let merged = MarkdownExporter.merge(existing: existing, section: section, highlights: [], printedPage: { _ in nil }, pdf: pdf)!
+    #expect(merged.contains("parent: mine\n"))
+    #expect(!merged.contains("\"book\": x") && !merged.contains("book : y"))
+    #expect(merged.components(separatedBy: "book:").count == 2)
+    let noPdf = MarkdownExporter.merge(existing: existing, section: section, highlights: [], printedPage: { _ in nil })!
+    #expect(noPdf.contains("\"book\": x\n") && noPdf.contains("book : y\n"))
+}
