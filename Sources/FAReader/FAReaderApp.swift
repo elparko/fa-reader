@@ -71,6 +71,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct AppCommands: Commands {
     @ObservedObject var model: AppModel
 
+    private var textFocused: Bool {
+        model.noteFocused || model.searchFieldFocused || NSApp.keyWindow?.firstResponder is NSText
+    }
+
     var body: some Commands {
 #if !APPSTORE
         CommandGroup(after: .appInfo) {
@@ -87,6 +91,7 @@ struct AppCommands: Commands {
                 Divider()
                 Button("Clear Menu") { model.clearRecent() }
             }
+            .disabled(model.recentBooks.isEmpty)
         }
         CommandGroup(after: .importExport) {
             Divider()
@@ -105,8 +110,8 @@ struct AppCommands: Commands {
                 .disabled(model.store == nil)
         }
         CommandGroup(replacing: .undoRedo) {
-            Button(model.noteFocused || model.searchFieldFocused ? "Undo" : model.undoTitle) { model.undo() }.keyboardShortcut("z")
-            Button(model.noteFocused || model.searchFieldFocused ? "Redo" : model.redoTitle) { model.redo() }
+            Button(textFocused ? "Undo" : model.undoTitle) { model.undo() }.keyboardShortcut("z")
+            Button(textFocused ? "Redo" : model.redoTitle) { model.redo() }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
         }
         CommandMenu("Highlight") {
@@ -122,7 +127,7 @@ struct AppCommands: Commands {
                 model.deleteFromMenu()
             }
                 .keyboardShortcut(.delete, modifiers: .command)
-                .disabled((model.selectedID == nil && model.barMode != .selection(erase: true)) || model.noteFocused)
+                .disabled((model.selectedID == nil && model.barMode != .selection(erase: true)) || model.noteFocused || NSApp.keyWindow?.firstResponder is NSText)
             Button("Copy Highlight Text") { _ = model.copySelectedHighlight() }
                 .disabled(model.selectedID == nil)
             Divider()

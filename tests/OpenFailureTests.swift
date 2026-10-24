@@ -21,7 +21,7 @@ import Testing
     struct Boom: Error, CustomStringConvertible { var description: String { "boom" } }
     let text = OpenFailure.reason(exists: true, status: .notDownloaded, downloadError: Boom())
     #expect(text.contains("could not start the download"))
-    #expect(text.contains("boom"))
+    #expect(!text.contains("boom"))
     #expect(!text.contains("started the download."))
 }
 
@@ -29,7 +29,7 @@ import Testing
     struct Boom: Error, CustomStringConvertible { var description: String { "boom" } }
     let text = OpenFailure.reason(exists: true, status: nil, statusError: Boom())
     #expect(text.contains("not a readable PDF"))
-    #expect(text.contains("boom"))
+    #expect(!text.contains("boom"))
 }
 
 @Test func openFailureNamesUnreadableFile() {

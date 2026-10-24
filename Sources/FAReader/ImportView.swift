@@ -13,8 +13,12 @@ struct ImportView: View {
                 content(preview)
             } else {
                 HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Scanning annotations")
+                    if let failure = model.importFailure {
+                        Text(failure)
+                    } else {
+                        ProgressView().controlSize(.small)
+                        Text("Scanning annotations")
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 HStack {
@@ -45,7 +49,7 @@ struct ImportView: View {
                         get: { includedBursts.contains(b.id) },
                         set: { if $0 { includedBursts.insert(b.id) } else { includedBursts.remove(b.id) } }
                     )) {
-                        Text("\(b.start.formatted(date: .abbreviated, time: .standard)) to \(b.end.formatted(date: .omitted, time: .standard)), \(b.count) items on \(b.pages) pages")
+                        Text("\(b.start.formatted(date: .abbreviated, time: .standard)) to \(b.end.formatted(date: .omitted, time: .standard)), \(b.count) \(b.count == 1 ? "item" : "items") on \(b.pages) \(b.pages == 1 ? "page" : "pages")")
                     }
                 }
             }
@@ -68,7 +72,7 @@ struct ImportView: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Import \(selected.count) items") { model.runImport(preview, bursts: includedBursts) }
+                Button("Import \(selected.count) \(selected.count == 1 ? "item" : "items")") { model.runImport(preview, bursts: includedBursts) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(selected.isEmpty)
             }

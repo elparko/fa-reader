@@ -47,12 +47,14 @@ struct SidebarView: View {
                 .onSubmit { model.goToEntered() }
                 .padding(10)
             List(model.sections) { s in
-                Text(s.title)
-                    .fontWeight(s.parent == nil ? .semibold : .regular)
-                    .padding(.leading, s.parent == nil ? 0 : 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.goTo(page: s.start) }
+                Button { model.goTo(page: s.start) } label: {
+                    Text(s.title)
+                        .fontWeight(s.parent == nil ? .semibold : .regular)
+                        .padding(.leading, s.parent == nil ? 0 : 14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
             .listStyle(.sidebar)
         }
@@ -63,7 +65,7 @@ struct SidebarView: View {
             if let (done, total) = model.indexProgress {
                 Text("Indexing book text \(done)/\(total)")
             }
-            if let last = model.lastSync {
+            if let last = model.lastSync, model.syncedDevices > 0 {
                 Text("Synced from \(model.syncedDevices) other device\(model.syncedDevices == 1 ? "" : "s") at \(last.formatted(date: .omitted, time: .shortened))")
             }
         }
@@ -84,8 +86,8 @@ struct SearchResultsView: View {
             if !pagesOnly {
                 VStack(alignment: .leading, spacing: 4) {
                     filters
-                    if let ms = model.searchMs {
-                        Text("\(model.results.count) results, \(String(format: "%.1f", ms)) ms")
+                    if model.searchMs != nil {
+                        Text(model.results.isEmpty ? "No results" : "\(model.results.count) \(model.results.count == 1 ? "result" : "results")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

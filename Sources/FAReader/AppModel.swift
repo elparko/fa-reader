@@ -132,6 +132,7 @@ final class AppModel: ObservableObject {
     @Published var pendingUndo: PendingUndo?
     @Published var showImport = false
     @Published var importPreview: ImportPreview?
+    @Published var importFailure: String?
 
     @Published var query = "" {
         didSet {
@@ -1238,9 +1239,10 @@ final class AppModel: ObservableObject {
             try body(false)
         } catch GuardError.needsConfirmation(let pages) {
             guard confirm("This will change \(pages) pages. Continue?") else { return false }
-            do { try body(true) } catch { notify("Change failed", info: "\(error)"); return false }
+            do { try body(true) } catch { print("change_failed \(error)"); notify("Change failed", info: "The change could not be saved. Try again."); return false }
         } catch {
-            notify("Change failed", info: "\(error)")
+            print("change_failed \(error)")
+            notify("Change failed", info: "The change could not be saved. Try again.")
             return false
         }
         if let store, let before, store.commitCount == before + 1 {
@@ -1662,12 +1664,21 @@ final class AppModel: ObservableObject {
     func beginImport() {
         guard store != nil, let url = pdfURL else { return }
         importPreview = nil
+        importFailure = nil
         showImport = true
         Task { @MainActor in
-            guard let fresh = PDFDocument(url: url) else { return }
+            guard let fresh = PDFDocument(url: url) else {
+                importFailure = "Rowlight could not read this PDF to scan its annotations."
+                return
+            }
             let scanned = await Task.detached(priority: .userInitiated) { PreviewImporter.scan(fresh) }.value
             guard showImport, let store else { return }
-            let already = (try? store.importedHighlightIDs()) ?? []
+            let already: Set<String>
+            do { already = try store.importedHighlightIDs() } catch {
+                print("import_scan_failed \(error)")
+                importFailure = "Rowlight could not check which highlights are already imported."
+                return
+            }
             importPreview = PreviewImporter.preview(annotations: scanned, alreadyImported: already)
         }
     }
