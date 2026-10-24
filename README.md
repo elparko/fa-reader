@@ -202,7 +202,9 @@ Privacy policy: <https://www.elparko.com/apps/rowlight/privacy/>
 
 Support: <https://www.elparko.com/apps/rowlight/support/>
 
-Those two links are also in the About window, from `Resources/Credits.html`.
+Contact: <rowlight@proton.me>
+
+The About window (`Resources/Credits.html`) shows that address and the two links. Use the same address for the App Store Connect review contact.
 
 The icon is `design/icon.svg` (a macOS squircle, transparent outside the plate). `./scripts/make-icon.sh` writes `Resources/AppIcon.icns` and the `AppIcon.appiconset` sizes from 16 px through 1024 px.
 
