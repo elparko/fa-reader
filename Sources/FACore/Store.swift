@@ -358,7 +358,11 @@ public final class Store {
             var lines = read.lines
             var end = read.end
             for (i, line) in read.lines.enumerated() where (try? decoder.decode(LogLine.self, from: line)) == nil {
-                guard (try? JSONSerialization.jsonObject(with: line)) != nil else { continue }
+                guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { continue }
+                if Self.isKnownShape(object) {
+                    FileHandle.standardError.write(Data("sync log: skipped damaged line in \(name) at offset \(read.starts[i])\n".utf8))
+                    continue
+                }
                 lines = Array(read.lines[..<i])
                 end = read.starts[i]
                 break
@@ -366,6 +370,16 @@ public final class Store {
             guard end != offset || !lines.isEmpty else { return nil }
             return LogRead(file: name, lines: lines, end: end)
         }
+    }
+
+    private static func isKnownShape(_ object: [String: Any]) -> Bool {
+        if let op = object["op"] as? [String: Any] {
+            return (op["kind"] as? String).flatMap(OpKind.init(rawValue:)) != nil
+        }
+        if let session = object["session"] as? [String: Any] {
+            return (session["kind"] as? String).flatMap(SessionKind.init(rawValue:)) != nil
+        }
+        return false
     }
 
     @discardableResult
