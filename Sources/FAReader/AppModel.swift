@@ -168,7 +168,6 @@ final class AppModel: ObservableObject {
     private(set) var notesURL: URL?
     private var notesSectionID: Int?
     private(set) var notesBlocked = false
-    private let notesWriteQueue = DispatchQueue(label: "fa-reader.notes-write", qos: .utility)
     private var notesDirty = false
     private var notesSaveWork: DispatchWorkItem?
     private var exportWork: DispatchWorkItem?
@@ -246,6 +245,8 @@ final class AppModel: ObservableObject {
     private var openToken = 0
     private(set) var tidyTask: Task<Void, Never>?
     private let latestOpenToken = LockedCounter()
+    private var indexToken = 0
+    private let latestIndexToken = LockedCounter()
     private var searchSeq = 0
     private var searchInFlight = false
     private var queuedSearchActions: [@MainActor () -> Void] = []
@@ -265,8 +266,10 @@ final class AppModel: ObservableObject {
     private var exitAfterMeasure: Bool { arguments.contains("--exit") }
 #endif
     var isTestRun: Bool {
-#if DEBUG
+#if DEBUG && !APPSTORE
         measureOpen || selfCheck != nil
+#elseif DEBUG
+        selfCheck != nil
 #elseif !APPSTORE
         measureOpen
 #else
@@ -387,7 +390,7 @@ final class AppModel: ObservableObject {
             let loaded = PDFDocument(url: url).flatMap { doc -> LoadedBook? in
                 let sections = Sections.from(document: doc)
                 guard latest.value == token else { return nil }
-                let prepared = Result { try Self.prepareBook(pdfURL: url, sandboxed: sandboxed, knownBookID: priorID) }
+                let prepared = Result { try Self.prepareBook(pdfURL: url, sandboxed: sandboxed, knownBookID: priorID, device: device) }
                 let store = prepared.flatMap { prepared in
                     Result { try Store(folder: prepared.folder, device: device, deviceName: Host.current().localizedName ?? "Mac") }
                 }
@@ -413,10 +416,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    nonisolated private static func prepareBook(pdfURL: URL, sandboxed: Bool, knownBookID: String?) throws -> OpenedBookData {
+    nonisolated private static func prepareBook(pdfURL: URL, sandboxed: Bool, knownBookID: String?, device: String) throws -> OpenedBookData {
         let ubiquity = sandboxed ? FileManager.default.url(forUbiquityContainerIdentifier: BookDataLocator.ubiquityContainerIdentifier) : nil
         let support = sandboxed ? try BookDataLocator.applicationSupportDirectory() : nil
-        return try BookOpener.prepare(pdfURL: pdfURL, sandboxed: sandboxed, ubiquityContainer: ubiquity, applicationSupport: support, knownBookID: knownBookID)
+        return try BookOpener.prepare(pdfURL: pdfURL, sandboxed: sandboxed, ubiquityContainer: ubiquity, applicationSupport: support, knownBookID: knownBookID, device: device)
     }
 
     private func finishOpen(_ url: URL, loaded: LoadedBook?, scope: FileScope, bookmark: Data?, completion: (() -> Void)?) {
@@ -696,8 +699,10 @@ final class AppModel: ObservableObject {
     private func startIndexing(url: URL, pageCount: Int) {
         guard let dbPath = store?.folder.databaseURL.path else { return }
         indexProgress = nil
-        let token = openToken
-        let latest = latestOpenToken
+        indexToken += 1
+        let token = indexToken
+        latestIndexToken.value = token
+        let latest = latestIndexToken
         DispatchQueue.global(qos: .utility).async {
             do {
                 let db = try Database(path: dbPath)
@@ -708,7 +713,7 @@ final class AppModel: ObservableObject {
                         DispatchQueue.main.async {
                             MainActor.assumeIsolated {
                                 let model = AppModel.shared
-                                if model.openToken == token { model.indexProgress = (done, total) }
+                                if model.indexToken == token { model.indexProgress = (done, total) }
                             }
                         }
                     }
@@ -718,14 +723,14 @@ final class AppModel: ObservableObject {
             } catch {
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        if AppModel.shared.openToken == token { AppModel.shared.indexProgress = nil }
+                        if AppModel.shared.indexToken == token { AppModel.shared.indexProgress = nil }
                     }
                 }
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     let model = AppModel.shared
-                    guard model.openToken == token else { return }
+                    guard model.indexToken == token else { return }
                     model.indexProgress = nil
                     model.printedCache = [:]
                     model.updatePageLabel()
@@ -1212,11 +1217,11 @@ final class AppModel: ObservableObject {
                 notify("Highlights changed", info: "Highlights changed while Rowlight checked them. Choose Tidy again.")
                 return
             }
-            applyTidy(plan, store: store)
+            applyTidy(plan, store: store, highlights: highlights)
         }
     }
 
-    private func applyTidy(_ plan: TidyPlan, store: Store) {
+    private func applyTidy(_ plan: TidyPlan, store: Store, highlights: [Highlight]) {
         guard !plan.ops.isEmpty else {
             notify("Nothing to tidy", info: "No highlights overlap and none stop partway through a word.")
             return
@@ -1226,6 +1231,10 @@ final class AppModel: ObservableObject {
         let info = "Overlapping highlights of one color are merged. Where colors overlap, the newer color wins. "
             + "Highlights that stop partway through a word are widened to the whole word. Cmd+Z undoes this."
         guard confirm(message, info: info, ok: "Tidy") else { return }
+        guard ((try? store.highlights()) ?? []) == highlights else {
+            notify("Highlights changed", info: "Highlights changed while Rowlight checked them. Choose Tidy again.")
+            return
+        }
         if commit({ _ in try store.commit(Plan(kind: .edit, label: "Edit", ops: plan.ops), confirmed: true) }) {
             select(nil)
             showNotice("Tidied \(before) highlights into \(after)")
@@ -1689,8 +1698,7 @@ final class AppModel: ObservableObject {
 
     /// Waits for log lines still queued for the log file. Called when the app quits.
     func flushLog() {
-        guard let store else { return }
-        folderQueue.sync { try? store.flushLog() }
+        folderQueue.sync { try? store?.flushLog() }
     }
 
     // MARK: History
@@ -1724,7 +1732,10 @@ final class AppModel: ObservableObject {
                 return
             }
             let scanned = await Task.detached(priority: .userInitiated) { PreviewImporter.scan(fresh) }.value
-            guard showImport, let store, store === startStore, openToken == token else { return }
+            guard showImport, let store, store === startStore, openToken == token else {
+                if showImport { importFailure = "The book changed while Rowlight scanned it. Close this window and choose Import again." }
+                return
+            }
             let already: Set<String>
             do { already = try store.importedHighlightIDs() } catch {
                 print("import_scan_failed \(error)")
@@ -1898,12 +1909,8 @@ extension AppModel {
         writeNotes(Data(marky.text.utf8), to: url)
     }
 
-    func drainNotesWrites() {
-        notesWriteQueue.sync {}
-    }
-
     private func writeNotes(_ data: Data, to url: URL) {
-        notesWriteQueue.async { [weak self] in
+        folderQueue.async { [weak self] in
             do {
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try MarkdownExporter.coordinated(url, options: .forReplacing) { try data.write(to: $0, options: .atomic) }
@@ -1920,6 +1927,7 @@ extension AppModel {
         let section = Sections.section(for: currentPageIndex, in: sections)
         guard force || section?.id != notesSectionID else { return }
         saveNotes()
+        folderQueue.sync {}
         notesSectionID = section?.id
         notesBlocked = false
         marky.isReadOnly = false
@@ -1962,6 +1970,7 @@ extension AppModel {
 
     func showNotesFile(_ file: URL) {
         saveNotes()
+        folderQueue.sync {}
         guard let text = try? String(contentsOf: file, encoding: .utf8) else { beep(); return }
         notesBlocked = false
         marky.isReadOnly = false

@@ -101,7 +101,7 @@ public enum SidecarMigration {
     /// Copies change logs and markdown the destination does not already have. For a log the destination already has, appends the source lines it lacks and counts lines whose op id matches a different line. The search index is not copied;
     /// it is rebuilt from the logs. The sidecar is left in place. A sidecar that cannot be read (the usual
     /// sandbox case, until the user picks the folder) is reported as unreadable and copies nothing.
-    public static func migrate(from sidecar: SyncFolder, to destination: SyncFolder, fileManager: FileManager = .default) -> SidecarMigrationReport {
+    public static func migrate(from sidecar: SyncFolder, to destination: SyncFolder, onlyLog: String? = nil, fileManager: FileManager = .default) -> SidecarMigrationReport {
         var report = SidecarMigrationReport.none
         if sidecar.root.standardizedFileURL.path == destination.root.standardizedFileURL.path {
             report.sidecarReadable = fileManager.fileExists(atPath: sidecar.root.path)
@@ -113,7 +113,7 @@ public enum SidecarMigration {
         report.sidecarReadable = true
 
         let logNames = ((try? fileManager.contentsOfDirectory(atPath: sidecar.changesURL.path)) ?? [])
-            .filter { $0.hasSuffix(".jsonl") && !$0.hasPrefix(".") }
+            .filter { $0.hasSuffix(".jsonl") && !$0.hasPrefix(".") && (onlyLog == nil || $0 == onlyLog) }
             .sorted()
         let markdownNames = ((try? fileManager.contentsOfDirectory(atPath: sidecar.markdownURL.path)) ?? [])
             .filter { $0.hasSuffix(".md") && !$0.hasPrefix(".") }
@@ -199,7 +199,7 @@ public enum BookStoreError: Error, CustomStringConvertible {
 
 public enum BookOpener {
     /// Chooses the sync folder and, for a sandboxed open, copies a readable legacy sidecar into it.
-    public static func prepare(pdfURL: URL, sandboxed: Bool, ubiquityContainer: URL?, applicationSupport: URL?, knownBookID: String? = nil) throws -> OpenedBookData {
+    public static func prepare(pdfURL: URL, sandboxed: Bool, ubiquityContainer: URL?, applicationSupport: URL?, knownBookID: String? = nil, device: String? = nil) throws -> OpenedBookData {
         if !sandboxed {
             let folder = SyncFolder(pdfURL: pdfURL)
             return OpenedBookData(folder: folder, bookID: nil, migration: .none, place: .besidePDF(folder.root))
@@ -208,7 +208,7 @@ public enum BookOpener {
         if ubiquityContainer == nil, applicationSupport == nil { throw BookStoreError.missingApplicationSupport }
         let support = applicationSupport ?? URL(fileURLWithPath: "/unused")
         let pageCount = CGPDFDocument(pdfURL as CFURL)?.numberOfPages
-        let bookID = resolveBookID(contentHash: contentHash, pageCount: pageCount, knownBookID: knownBookID, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport)
+        let bookID = resolveBookID(contentHash: contentHash, pageCount: pageCount, knownBookID: knownBookID, device: device, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport)
         let place = BookDataLocator.place(pdfURL: pdfURL, bookID: bookID, sandboxed: true, ubiquityContainer: ubiquityContainer, applicationSupport: support)
         let folder = SyncFolder(root: place.root)
         // A launch before the iCloud container existed stored the book in Application Support.
@@ -259,7 +259,7 @@ public enum BookOpener {
         return nil
     }
 
-    private static func resolveBookID(contentHash: String, pageCount: Int?, knownBookID: String?, ubiquityContainer: URL?, applicationSupport: URL?) -> String {
+    private static func resolveBookID(contentHash: String, pageCount: Int?, knownBookID: String?, device: String?, ubiquityContainer: URL?, applicationSupport: URL?) -> String {
         let base: URL
         if let ubiquityContainer {
             base = ubiquityContainer.appendingPathComponent("Documents", isDirectory: true)
@@ -279,7 +279,7 @@ public enum BookOpener {
                 sources.append(BookDataLocator.containerPlace(bookID: contentHash, ubiquityContainer: nil, applicationSupport: applicationSupport).root)
             }
             for source in sources {
-                _ = SidecarMigration.migrate(from: SyncFolder(root: source), to: destination)
+                _ = SidecarMigration.migrate(from: SyncFolder(root: source), to: destination, onlyLog: device.map { "\($0).jsonl" } ?? "")
             }
             return target
         }

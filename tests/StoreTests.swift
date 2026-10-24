@@ -1126,6 +1126,29 @@ private func remoteLog(_ source: SyncFolder = tempFolder()) throws -> (lines: [S
     #expect(after > newest)
 }
 
+@Test func sequenceAfterARebuiltDatabaseExceedsEverySequenceInTheLog() throws {
+    let folder = tempFolder()
+    let clock = TestClock()
+    let first = try makeStore(folder, clock: clock)
+    try first.add([makeHighlight("a")])
+    clock.minutes(1)
+    try first.setColor(["a"], .blue)
+    let fm = FileManager.default
+    let dir = folder.localURL.path
+    for name in try fm.contentsOfDirectory(atPath: dir) where name.hasPrefix("fa.sqlite") {
+        try fm.removeItem(atPath: dir + "/" + name)
+    }
+    let logged = try logObjects(folder, device: "mac-a").compactMap { ($0["op"] as? [String: Any])?["seq"] as? Int }
+    #expect(logged.count == 2)
+    clock.minutes(1)
+    let rebuilt = try makeStore(folder, clock: clock)
+    try rebuilt.add([makeHighlight("b", page: 2)])
+    let newest = try #require(try rebuilt.db.scalar("SELECT MAX(seq) FROM ops WHERE device='mac-a'") as? Int64)
+    #expect(newest > Int64(logged.max()!))
+    let appended = try logObjects(folder, device: "mac-a").compactMap { ($0["op"] as? [String: Any])?["seq"] as? Int }
+    #expect(appended.count == 3 && appended.last! > logged.max()!)
+}
+
 @Test func corruptDatabaseIsMovedAsideAndRebuiltFromLogs() throws {
     let folder = tempFolder()
     let clock = TestClock()

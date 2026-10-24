@@ -30,25 +30,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
 #if !APPSTORE
-        let headless = AppModel.shared.isTestRun
-#else
-        let headless = false
-#endif
-        if headless {
+        if AppModel.shared.isTestRun {
             NSApp.setActivationPolicy(.accessory)
-#if !APPSTORE
             for window in NSApp.windows where !CommandLine.arguments.contains("--visible") {
                 window.alphaValue = 0
                 window.ignoresMouseEvents = true
             }
-#endif
         } else {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
-#if !APPSTORE
             Updater.checkDaily()
-#endif
         }
+#else
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+#endif
 #if !APPSTORE
         if CommandLine.arguments.contains("--print-update") {
             Task {
@@ -67,7 +63,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         AppModel.shared.flushNote()
         AppModel.shared.saveNotes()
-        AppModel.shared.drainNotesWrites()
         AppModel.shared.flushLog()
     }
 }
