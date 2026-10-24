@@ -33,10 +33,16 @@ public struct SyncFolder: Equatable {
                 if !FileManager.default.fileExists(atPath: u.path) {
                     FileManager.default.createFile(atPath: u.path, contents: nil)
                 }
-                let handle = try FileHandle(forWritingTo: u)
+                let handle = try FileHandle(forUpdating: u)
                 defer { try? handle.close() }
-                try handle.seekToEnd()
+                let size = try handle.seekToEnd()
+                if size > 0 {
+                    try handle.seek(toOffset: size - 1)
+                    if try handle.read(upToCount: 1) != Data([0x0A]) { data.insert(0x0A, at: data.startIndex) }
+                    try handle.seekToEnd()
+                }
                 try handle.write(contentsOf: data)
+                try handle.synchronize()
             } catch {
                 writeError = error
             }
@@ -62,23 +68,24 @@ public struct SyncFolder: Equatable {
         return files.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
-    public func readLines(_ url: URL, from offset: Int) -> (lines: [Data], end: Int)? {
+    public func readLines(_ url: URL, from offset: Int) -> (lines: [Data], starts: [Int], end: Int)? {
         var coordError: NSError?
-        var result: (lines: [Data], end: Int)?
+        var result: (lines: [Data], starts: [Int], end: Int)?
         NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { u in
             guard let handle = try? FileHandle(forReadingFrom: u) else { return }
             defer { try? handle.close() }
             let size = Int((try? handle.seekToEnd()) ?? 0)
             let start = size < offset ? 0 : offset
-            if size == start { result = ([], start); return }
+            if size == start { result = ([], [], start); return }
             try? handle.seek(toOffset: UInt64(start))
             guard let data = try? handle.readToEnd(), let lastNewline = data.lastIndex(of: 0x0A) else {
-                result = ([], start)
+                result = ([], [], start)
                 return
             }
             let complete = data[data.startIndex...lastNewline]
-            let lines = complete.split(separator: 0x0A, omittingEmptySubsequences: true).map { Data($0) }
-            result = (lines, start + complete.count)
+            let pieces = complete.split(separator: 0x0A, omittingEmptySubsequences: true)
+            let starts = pieces.map { start + $0.startIndex - data.startIndex }
+            result = (pieces.map { Data($0) }, starts, start + complete.count)
         }
         return result
     }

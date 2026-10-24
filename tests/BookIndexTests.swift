@@ -105,3 +105,13 @@ func indexRealBook() throws {
     #expect(labels[5] == nil)
     #expect(labels[55] == nil)
 }
+
+@Test func indexingMoreThanOneBatchStoresEveryPage() throws {
+    let db = try freshDatabase()
+    let document = PDFDocument()
+    for i in 0..<(BookIndex.batchSize * 3 + 7) { document.insert(PDFPage(), at: i) }
+    try BookIndex.index(document: document, into: db)
+    #expect(try BookIndex.isIndexed(db: db, pageCount: document.pageCount))
+    try BookIndex.index(document: document, into: db)
+    #expect(try db.scalar("SELECT COUNT(*) FROM book_fts") as? Int64 == Int64(document.pageCount))
+}

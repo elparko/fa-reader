@@ -129,3 +129,21 @@ private func text(_ lines: [Data]) -> [String] { lines.map { String(decoding: $0
         }
     }
 }
+
+@Test func syncFolderAppendAfterTornTailStartsNewLine() throws {
+    let f = tempFolder()
+    try f.prepare()
+    let url = f.logURL(device: "a")
+    try Data("one\ntw".utf8).write(to: url)
+    try f.append([lineData("three")], device: "a")
+    #expect(try String(contentsOf: url, encoding: .utf8) == "one\ntw\nthree\n")
+}
+
+@Test func syncFolderAppendToEmptyFileAddsNoBlankLine() throws {
+    let f = tempFolder()
+    try f.prepare()
+    let url = f.logURL(device: "a")
+    try Data().write(to: url)
+    try f.append([lineData("one")], device: "a")
+    #expect(try String(contentsOf: url, encoding: .utf8) == "one\n")
+}
