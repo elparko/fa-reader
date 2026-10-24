@@ -211,4 +211,4 @@ The icon is `design/icon.svg` (a macOS squircle, transparent outside the plate).
 ## Third-party code
 
 - md4c 0.5.2 (MIT), in `Sources/md4c`.
-- Marky markdown view, in `Sources/FAReader/Marky`. No public upstream or license was found. The unique symbols `MARKY_TRACE` and `MarkyTaskOffset` do not appear in public code search, and the files are not [M2Mobi/Marky-Mark](https://github.com/M2mobi/Marky-Mark) (a different iOS library). They were added in this repository in commit `f00b2b4` (2026-09-29). Treat them as part of this app until that origin is confirmed. They stay in the build. Marky calls md4c, which is MIT.
+- Marky markdown view, in `Sources/FAReader/Marky`. It is first-party code written in this repository. It calls md4c, which is MIT.
