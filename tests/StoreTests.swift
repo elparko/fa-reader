@@ -1077,6 +1077,20 @@ private func remoteLog(_ source: SyncFolder = tempFolder()) throws -> (lines: [S
     #expect(try p.a.highlights().map(\.id) == ["x1", "x2", "x3"])
 }
 
+@Test func knownKindWithMissingFieldIsSkippedAndLaterLinesApply() throws {
+    let (lines, _) = try remoteLog()
+    let p = try Pair()
+    let url = p.folder.logURL(device: "mac-x")
+    var changed = lines
+    changed[2] = changed[2].replacingOccurrences(of: "\"highlight\":", with: "\"highlightX\":")
+    #expect(changed[2] != lines[2])
+    try Data((changed.joined(separator: "\n") + "\n").utf8).write(to: url)
+    try p.a.sync()
+    #expect(try p.a.highlights().map(\.id) == ["x1", "x3"])
+    let total = changed.map { $0.utf8.count + 1 }.reduce(0, +)
+    #expect(try p.a.db.scalar("SELECT offset FROM sync_offsets WHERE file='mac-x.jsonl'") as? Int64 == Int64(total))
+}
+
 @Test func lineThatIsNotJSONIsSkipped() throws {
     let (lines, _) = try remoteLog()
     let p = try Pair()
