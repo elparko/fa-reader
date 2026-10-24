@@ -7,8 +7,8 @@ This pull request replaces PR #1.
 ## Summary
 
 - The App Store target builds, signs with Apple Distribution (team 74W94PA2F4, Pereste Health Inc), and exports a Mac App Store package.
-- Validate App did not run. This Mac has no App Store Connect key. See "Owner steps".
-- The review fixed 8 blockers, 19 high findings, and 15 medium findings. One blocker (Validate App) and 13 medium findings stay open with a recommendation.
+- Validate App passed: `xcrun altool --validate-app` with the App Store Connect API key returned "VERIFY SUCCEEDED with no errors" for the export of commit `4fc0cd8`.
+- The review fixed 9 blockers, 19 high findings, and 15 medium findings. 13 medium findings stay open with a recommendation.
 - Tests: after the compile fix, 205 tests passed. Now 237 Swift Testing tests and 5 XCTest tests pass (`swift test`). Debug and Release Xcode builds pass.
 - Measured on a 1000-page PDF with 2984 highlights (MacBook Pro, M2 Max): open 0.5–0.7 s, search 9 ms median and 16 ms at the 95th percentile, full highlight rebuild 0.1 s.
 
@@ -40,7 +40,7 @@ PR #1 was open, not merged, and nobody had compiled it. Its body says so. Result
 | B6 | The Help menu showed "Help isn't available". The app had no support link. | `Sources/FAReader/FAReaderApp.swift:155` | Fixed. Help has "Rowlight Support" and "Privacy Policy". |
 | B7 | Signing used the ad hoc identity `-` with iCloud entitlements, and no team. | `FAReader.xcodeproj/project.pbxproj`, `Config/Brand.xcconfig:11` | Fixed. Automatic signing, `DEVELOPMENT_TEAM = 74W94PA2F4`. Team XFD87T8UD7 is a free personal team and cannot use iCloud. |
 | B8 | The Xcode Debug build did not compile after the test flags moved behind `!APPSTORE` (the Debug configuration sets `DEBUG APPSTORE`). | `Sources/FAReader/AppModel.swift:271` | Fixed. Debug and Release both build. |
-| B9 | Archive and Validate App. | — | Partly done. The archive builds and the App Store export signs. Validate App needs the owner (see "Owner steps"). |
+| B9 | Archive and Validate App. | `~/Library/Developer/Xcode/Archives/2026-10-24/Rowlight-1.0.0.xcarchive` | Done. The Release archive builds. The App Store export is signed by Apple Distribution: Pereste Health Inc. Validation with the App Store Connect API key (key 3CWB8ZZJ4C) returned "VERIFY SUCCEEDED with no errors". |
 
 ## High
 
@@ -139,8 +139,8 @@ Storage, migrations, and sync merge:
 
 ## Owner steps
 
-1. Run Validate App. Open Xcode > Window > Organizer and select `Rowlight-1.0.0` (2026-10-24). Or give an App Store Connect API key (`.p8`, key ID, issuer ID) and Claude runs `xcrun altool --validate-app`.
-   - The export log says "No provider associated with App Store Connect user". Make sure the Apple ID in Xcode has App Store Connect access for Pereste Health Inc, and that the app record for `com.parkersmith.fa-reader` exists there.
+1. Upload the build. Validate App already passed. Upload from Xcode Organizer (`Rowlight-1.0.0`, 2026-10-24), or ask Claude to upload the validated package with the API key.
+   - The Xcode export log says "No provider associated with App Store Connect user". The API key works, but the Apple ID in Xcode has no App Store Connect access for Pereste Health Inc. Add that access if you upload from Organizer.
    - The archive in Organizer is ad hoc signed, because no Mac is registered on the team. The export re-signs it with Apple Distribution. To archive normally, open the project, select team Pereste Health Inc under Signing & Capabilities, and let Xcode register this Mac.
 2. In the developer portal, confirm the iCloud container `iCloud.com.parkersmith.fa-reader` exists on the App ID. The distribution profile names it.
 3. Decide the copyright holder (`FA_COPYRIGHT` in `Config/Brand.xcconfig`).
