@@ -170,6 +170,7 @@ final class AppModel: ObservableObject {
     private(set) var notesBlocked = false
     private(set) var notesLoading = false
     private var notesLoadToken = 0
+    private var notesLoadingSectionID: Int?
     private var notesDirty = false
     private var notesSaveWork: DispatchWorkItem?
     private var exportWork: DispatchWorkItem?
@@ -1924,8 +1925,9 @@ extension AppModel {
         }
     }
 
-    private func beginNotesLoad() -> Int {
+    private func beginNotesLoad(sectionID: Int? = nil) -> Int {
         saveNotes()
+        notesLoadingSectionID = sectionID
         notesLoadToken += 1
         notesLoading = true
         marky.isReadOnly = true
@@ -1934,17 +1936,20 @@ extension AppModel {
 
     private func endNotesLoad() {
         notesLoading = false
-        marky.isReadOnly = notesBlocked
+        notesLoadingSectionID = nil
+        marky.isReadOnly = notesBlocked || notesURL == nil
     }
 
     func refreshNotes(force: Bool = false) {
         guard notesShown, let store, let dir = exportDirectory else { return }
         let section = Sections.section(for: currentPageIndex, in: sections)
         guard force || section?.id != notesSectionID else { return }
-        let token = beginNotesLoad()
+        guard force || section == nil || !notesLoading || section?.id != notesLoadingSectionID else { return }
+        let token = beginNotesLoad(sectionID: section?.id)
         notesBlocked = false
         guard let section else {
             notesSectionID = nil
+            notesDirty = false
             notesURL = nil
             notesTitle = "Notes"
             marky.text = ""
@@ -1995,6 +2000,7 @@ extension AppModel {
                         self.notesTitle = section.title
                         self.marky.baseURL = dir
                         if self.marky.text != result.0 { self.marky.text = result.0 }
+                        self.notesDirty = false
                     }
                     self.endNotesLoad()
                 }
@@ -2043,6 +2049,7 @@ extension AppModel {
         for page in Set(highlights.map(\.page)) { printedPages[page] = printed(page) }
         let write = { _ = try? MarkdownExporter.export(highlights: highlights, sections: sections, to: dir, printedPage: { printedPages[$0] }, pdf: pdf, bookID: bookID) }
         if isTestRun {
+            folderQueue.sync {}
             write()
             refreshNotes(force: true)
             return

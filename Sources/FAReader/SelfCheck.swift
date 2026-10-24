@@ -671,13 +671,13 @@ final class SelfCheck {
             let mine = "\nThyroid storm: treat with the 4 Ps. #mine\n"
             try? (model.marky.text + mine).write(to: url, atomically: true, encoding: .utf8)
             model.refreshNotes(force: true)
-            await pause(0.4)
+            await waitFor { !model.notesLoading }
             if let sel = select("Other causes", page: graves) {
                 model.pdfView.setCurrentSelection(sel, animate: false)
                 model.applyColor(.yellow)
             }
             model.exportQuietly()
-            await pause(0.4)
+            await waitFor { !model.notesLoading }
             let onDisk = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
             check("notes keep what you wrote when highlights change", onDisk.contains("treat with the 4 Ps. #mine") && onDisk.contains("Other causes"),
                   String(onDisk.suffix(300)))

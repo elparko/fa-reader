@@ -374,8 +374,15 @@ private func putLog(_ bookID: String, support: URL) throws {
     let second = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, knownBookID: a, device: "mac")
     #expect(second.bookID == a)
     #expect(FileManager.default.fileExists(atPath: support.appendingPathComponent("Aliases/\(edited).json").path))
-    let otherMac = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac")
+    let hashFolder = SyncFolder(root: BookDataLocator.containerPlace(bookID: edited, ubiquityContainer: nil, applicationSupport: support).root)
+    try hashFolder.prepare()
+    try Data("other-mac-log\n".utf8).write(to: hashFolder.logURL(device: "other-mac"))
+    try Data("third-log\n".utf8).write(to: hashFolder.logURL(device: "third"))
+    let otherMac = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "other-mac")
     #expect(otherMac.bookID == a)
+    #expect(try String(contentsOf: otherMac.folder.logURL(device: "other-mac"), encoding: .utf8) == "other-mac-log\n")
+    #expect(!FileManager.default.fileExists(atPath: otherMac.folder.logURL(device: "third").path))
+    #expect(try String(contentsOf: otherMac.folder.logURL(device: "mac"), encoding: .utf8) == "{}\n")
 }
 
 @Test func differentPageCountDoesNotInheritTheKnownBook() throws {
