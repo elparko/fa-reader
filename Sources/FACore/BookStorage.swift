@@ -55,7 +55,22 @@ public enum BookDataLocator {
         let data = try JSONSerialization.data(withJSONObject: ["file": fileName, "id": bookID], options: [.sortedKeys])
         let url = folder.root.appendingPathComponent("book.json")
         if let existing = try? Data(contentsOf: url), existing == data { return }
-        try data.write(to: url, options: .atomic)
+        try CoordinatedFile.replace(at: url) { try data.write(to: $0, options: .atomic) }
+    }
+}
+
+enum CoordinatedFile {
+    static func replace(at url: URL, _ body: (URL) throws -> Void) throws {
+        var coordError: NSError?
+        var writeError: Error?
+        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { u in
+            do { try body(u) } catch { writeError = error }
+        }
+        if let e = coordError ?? writeError { throw e }
+    }
+
+    static func copy(from source: URL, to destination: URL) throws {
+        try replace(at: destination) { try FileManager.default.copyItem(at: source, to: $0) }
     }
 }
 
@@ -64,6 +79,7 @@ public struct SidecarMigrationReport: Equatable {
     public var copiedLogs: [String]
     public var copiedMarkdown: [String]
     public var destinationHadLogs: Bool
+    public var idCollisions: Int = 0
 
     public static let none = SidecarMigrationReport(sidecarReadable: false, copiedLogs: [], copiedMarkdown: [], destinationHadLogs: false)
 }
@@ -79,7 +95,7 @@ public enum SidecarMigration {
         return selected
     }
 
-    /// Copies change logs and markdown the destination does not already have. The search index is not copied;
+    /// Copies change logs and markdown the destination does not already have. For a log the destination already has, appends the source lines it lacks and counts lines whose op id matches a different line. The search index is not copied;
     /// it is rebuilt from the logs. The sidecar is left in place. A sidecar that cannot be read (the usual
     /// sandbox case, until the user picks the folder) is reported as unreadable and copies nothing.
     public static func migrate(from sidecar: SyncFolder, to destination: SyncFolder, fileManager: FileManager = .default) -> SidecarMigrationReport {
@@ -108,19 +124,56 @@ public enum SidecarMigration {
         try? fileManager.createDirectory(at: destination.markdownURL, withIntermediateDirectories: true)
         for name in logNames {
             let dest = destination.changesURL.appendingPathComponent(name)
-            if fileManager.fileExists(atPath: dest.path) { continue }
-            if (try? fileManager.copyItem(at: sidecar.changesURL.appendingPathComponent(name), to: dest)) != nil {
+            let source = sidecar.changesURL.appendingPathComponent(name)
+            if fileManager.fileExists(atPath: dest.path) {
+                let merged = mergeLog(from: source, into: dest, name: name, destination: destination)
+                if merged.appended > 0 { report.copiedLogs.append(name) }
+                report.idCollisions += merged.collisions
+                continue
+            }
+            if (try? CoordinatedFile.copy(from: source, to: dest)) != nil {
                 report.copiedLogs.append(name)
             }
         }
         for name in markdownNames {
             let dest = destination.markdownURL.appendingPathComponent(name)
             if fileManager.fileExists(atPath: dest.path) { continue }
-            if (try? fileManager.copyItem(at: sidecar.markdownURL.appendingPathComponent(name), to: dest)) != nil {
+            if (try? CoordinatedFile.copy(from: sidecar.markdownURL.appendingPathComponent(name), to: dest)) != nil {
                 report.copiedMarkdown.append(name)
             }
         }
         return report
+    }
+
+    private static func lineID(_ line: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return nil }
+        for kind in ["op", "session"] {
+            if let body = object[kind] as? [String: Any], let id = body["id"] as? String { return "\(kind):\(id)" }
+        }
+        return nil
+    }
+
+    private static func mergeLog(from source: URL, into dest: URL, name: String, destination: SyncFolder) -> (appended: Int, collisions: Int) {
+        guard let sourceLines = destination.readLines(source, from: 0)?.lines, !sourceLines.isEmpty,
+              let destLines = destination.readLines(dest, from: 0)?.lines else { return (0, 0) }
+        var known = Set(destLines)
+        var ids = Set(destLines.compactMap(lineID))
+        var missing: [Data] = []
+        var collisions = 0
+        for line in sourceLines {
+            if known.contains(line) { continue }
+            if let id = lineID(line), ids.contains(id) {
+                collisions += 1
+                continue
+            }
+            missing.append(line)
+            known.insert(line)
+            if let id = lineID(line) { ids.insert(id) }
+        }
+        guard !missing.isEmpty else { return (0, collisions) }
+        let device = String(name.dropLast(".jsonl".count))
+        guard (try? destination.append(missing, device: device)) != nil else { return (0, collisions) }
+        return (missing.count, collisions)
     }
 }
 
@@ -168,7 +221,8 @@ public enum BookOpener {
             sidecarReadable: fromSidecar.sidecarReadable,
             copiedLogs: fromSupport.copiedLogs + fromSidecar.copiedLogs,
             copiedMarkdown: fromSupport.copiedMarkdown + fromSidecar.copiedMarkdown,
-            destinationHadLogs: fromSupport.destinationHadLogs || fromSidecar.destinationHadLogs
+            destinationHadLogs: fromSupport.destinationHadLogs || fromSidecar.destinationHadLogs,
+            idCollisions: fromSupport.idCollisions + fromSidecar.idCollisions
         )
         try BookDataLocator.writeIdentity(bookID: bookID, fileName: pdfURL.lastPathComponent, folder: folder)
         return OpenedBookData(folder: folder, bookID: bookID, migration: migration, place: place)

@@ -78,11 +78,14 @@ private func scratch() throws -> URL {
     #expect(identity?["id"] == hash)
     #expect(identity?["file"] == "Guide.pdf")
 
-    try Data("changed".utf8).write(to: opened.folder.logURL(device: "other"))
+    try Data("changed\n".utf8).write(to: opened.folder.logURL(device: "other"))
     let again = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
     #expect(again.migration.destinationHadLogs)
-    #expect(again.migration.copiedLogs.isEmpty)
-    #expect(try String(contentsOf: again.folder.logURL(device: "other"), encoding: .utf8) == "changed")
+    #expect(again.migration.copiedLogs == ["other.jsonl"])
+    #expect(try String(contentsOf: again.folder.logURL(device: "other"), encoding: .utf8) == "changed\nnot-json\n")
+    let third = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    #expect(third.migration.copiedLogs.isEmpty)
+    #expect(try String(contentsOf: third.folder.logURL(device: "other"), encoding: .utf8) == "changed\nnot-json\n")
 
     let store = try Store(folder: opened.folder, device: "mac", deviceName: "Mac")
     #expect(store.folder.databaseURL.path.hasSuffix("local.nosync/fa.sqlite"))
@@ -251,4 +254,70 @@ private func scratch() throws -> URL {
     let resolved = try BookmarkStore.resolve(saved.data)
     #expect(resolved.url.standardizedFileURL.path == url.standardizedFileURL.path)
     #expect(resolved.url.lastPathComponent == saved.name)
+}
+
+private func opLine(id: String, seq: Int, highlight: String = "h") -> Data {
+    Data(#"{"op":{"id":"\#(id)","device":"d","seq":\#(seq),"ts":1,"session":"s","kind":"add","highlight":"\#(highlight)","page":0}}"#.utf8)
+}
+
+private func sessionLine(id: String) -> Data {
+    Data(#"{"session":{"id":"\#(id)","device":"d","deviceName":"D","started":1,"kind":"edit","label":"x"}}"#.utf8)
+}
+
+private func migrationFolders() throws -> (root: URL, source: SyncFolder, destination: SyncFolder) {
+    let root = try scratch()
+    let source = SyncFolder(root: root.appendingPathComponent("source", isDirectory: true))
+    let destination = SyncFolder(root: root.appendingPathComponent("destination", isDirectory: true))
+    try source.prepare()
+    try destination.prepare()
+    return (root, source, destination)
+}
+
+private func logText(_ folder: SyncFolder, _ device: String) throws -> [String] {
+    try String(contentsOf: folder.logURL(device: device), encoding: .utf8).split(separator: "\n").map(String.init)
+}
+
+@Test func migrationIntoAnExistingLogAppendsMissingLinesOnce() throws {
+    let (root, source, destination) = try migrationFolders()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try destination.append([sessionLine(id: "s1"), opLine(id: "a", seq: 1)], device: "mac")
+    try source.append([sessionLine(id: "s1"), opLine(id: "a", seq: 1), sessionLine(id: "s2"), opLine(id: "b", seq: 2)], device: "mac")
+
+    let first = SidecarMigration.migrate(from: source, to: destination)
+    #expect(first.copiedLogs == ["mac.jsonl"])
+    #expect(first.idCollisions == 0)
+    #expect(try logText(destination, "mac").count == 4)
+
+    let second = SidecarMigration.migrate(from: source, to: destination)
+    #expect(second.copiedLogs.isEmpty)
+    #expect(try logText(destination, "mac").count == 4)
+}
+
+@Test func migrationCountsAnIdCollisionAndDoesNotAppendIt() throws {
+    let (root, source, destination) = try migrationFolders()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try destination.append([opLine(id: "a", seq: 1, highlight: "one")], device: "mac")
+    try source.append([opLine(id: "a", seq: 1, highlight: "two"), opLine(id: "b", seq: 2)], device: "mac")
+
+    let report = SidecarMigration.migrate(from: source, to: destination)
+    #expect(report.idCollisions == 1)
+    #expect(report.copiedLogs == ["mac.jsonl"])
+    let lines = try logText(destination, "mac")
+    #expect(lines.count == 2)
+    #expect(!lines.contains { $0.contains(#""highlight":"two""#) })
+
+    let again = SidecarMigration.migrate(from: source, to: destination)
+    #expect(again.idCollisions == 1)
+    #expect(again.copiedLogs.isEmpty)
+    #expect(try logText(destination, "mac").count == 2)
+}
+
+@Test func differentPDFBytesGiveDifferentBookIDs() throws {
+    let root = try scratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let one = root.appendingPathComponent("one.pdf")
+    let two = root.appendingPathComponent("two.pdf")
+    try Data("one".utf8).write(to: one)
+    try Data("two".utf8).write(to: two)
+    #expect(try BookIdentity.contentHash(of: one) != BookIdentity.contentHash(of: two))
 }
