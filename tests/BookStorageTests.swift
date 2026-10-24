@@ -443,7 +443,7 @@ private func writeAlias(_ hash: String, to target: String, support: URL) throws 
     #expect(opened.bookID == "b-book")
 }
 
-@Test func aliasMergesTheHashFolderLogsIntoTheTargetOnce() throws {
+@Test func aliasMergesOnlyThisDevicesLogIntoTheTargetOnce() throws {
     let root = try scratch()
     defer { try? FileManager.default.removeItem(at: root) }
     let support = root.appendingPathComponent("Support")
@@ -456,10 +456,30 @@ private func writeAlias(_ hash: String, to target: String, support: URL) throws 
     try hashFolder.prepare()
     try hashFolder.append([Data("{\"extra\":1}".utf8)], device: "mac")
     for _ in 0..<2 {
-        let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+        let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "mac")
         #expect(opened.bookID == "b-book")
     }
     let target = SyncFolder(root: BookDataLocator.containerPlace(bookID: "b-book", ubiquityContainer: nil, applicationSupport: support).root)
     let text = try String(contentsOf: target.logURL(device: "mac"), encoding: .utf8)
     #expect(text.components(separatedBy: "{\"extra\":1}").count == 2)
+}
+
+@Test func aliasDoesNotAppendAnotherDevicesLogIntoTheTarget() throws {
+    let root = try scratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let support = root.appendingPathComponent("Support")
+    let pdf = root.appendingPathComponent("a.pdf")
+    try makePDF(at: pdf, pages: 3)
+    let hash = try BookIdentity.contentHash(of: pdf)
+    try putLog("b-book", support: support)
+    try writeAlias(hash, to: "b-book", support: support)
+    let hashFolder = SyncFolder(root: BookDataLocator.containerPlace(bookID: hash, ubiquityContainer: nil, applicationSupport: support).root)
+    try hashFolder.prepare()
+    try hashFolder.append([Data("{\"extra\":1}".utf8)], device: "mac")
+    let target = SyncFolder(root: BookDataLocator.containerPlace(bookID: "b-book", ubiquityContainer: nil, applicationSupport: support).root)
+    let before = try Data(contentsOf: target.logURL(device: "mac"))
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, device: "other")
+    #expect(opened.bookID == "b-book")
+    #expect(try Data(contentsOf: target.logURL(device: "mac")) == before)
+    #expect(!FileManager.default.fileExists(atPath: target.logURL(device: "other").path))
 }
