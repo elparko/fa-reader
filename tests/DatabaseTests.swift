@@ -168,5 +168,10 @@ private struct Boom: Error {}
     let db = try tempDatabase()
     try db.exec("PRAGMA user_version=99")
     #expect(throws: DatabaseError.self) { try Store.migrate(db) }
-    do { try Store.migrate(db) } catch { #expect(error.localizedDescription.contains("newer version") || "\(error)".contains("newer version")) }
+    do { try Store.migrate(db) } catch let error as DatabaseError {
+        #expect(error.isNewerSchema)
+        #expect(error.description.contains("newer version of Rowlight"))
+    }
+    #expect(throws: Never.self) { try db.exec("SELECT 1") }
+    do { _ = try db.query("SELECT * FROM missing") } catch let error as DatabaseError { #expect(!error.isNewerSchema) }
 }

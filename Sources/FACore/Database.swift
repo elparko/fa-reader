@@ -6,6 +6,7 @@ private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.sel
 public struct DatabaseError: Error, CustomStringConvertible {
     public let message: String
     public var code: Int32 = 0
+    public var isNewerSchema = false
     public var description: String { message }
 }
 
@@ -47,7 +48,7 @@ public final class Database {
     public func migrate(_ steps: [(Database) throws -> Void]) throws {
         let current = userVersion
         if current > steps.count {
-            throw DatabaseError(message: "This book's saved data was made by a newer version of Rowlight (schema \(current)). Update the app to open it.")
+            throw DatabaseError(message: "This book's saved data was made by a newer version of Rowlight (schema \(current)). Update the app to open it.", isNewerSchema: true)
         }
         guard current < steps.count else { return }
         try transaction {
