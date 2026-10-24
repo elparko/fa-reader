@@ -199,7 +199,7 @@ public enum BookStoreError: Error, CustomStringConvertible {
 
 public enum BookOpener {
     /// Chooses the sync folder and, for a sandboxed open, copies a readable legacy sidecar into it.
-    public static func prepare(pdfURL: URL, sandboxed: Bool, ubiquityContainer: URL?, applicationSupport: URL?, knownBookID: String? = nil, device: String? = nil) throws -> OpenedBookData {
+    public static func prepare(pdfURL: URL, sandboxed: Bool, ubiquityContainer: URL?, applicationSupport: URL?, knownBookID: String? = nil, device: String) throws -> OpenedBookData {
         if !sandboxed {
             let folder = SyncFolder(pdfURL: pdfURL)
             return OpenedBookData(folder: folder, bookID: nil, migration: .none, place: .besidePDF(folder.root))
@@ -259,7 +259,7 @@ public enum BookOpener {
         return nil
     }
 
-    private static func resolveBookID(contentHash: String, pageCount: Int?, knownBookID: String?, device: String?, ubiquityContainer: URL?, applicationSupport: URL?) -> String {
+    private static func resolveBookID(contentHash: String, pageCount: Int?, knownBookID: String?, device: String, ubiquityContainer: URL?, applicationSupport: URL?) -> String {
         let base: URL
         if let ubiquityContainer {
             base = ubiquityContainer.appendingPathComponent("Documents", isDirectory: true)
@@ -279,7 +279,7 @@ public enum BookOpener {
                 sources.append(BookDataLocator.containerPlace(bookID: contentHash, ubiquityContainer: nil, applicationSupport: applicationSupport).root)
             }
             for source in sources {
-                _ = SidecarMigration.migrate(from: SyncFolder(root: source), to: destination, onlyLog: device.map { "\($0).jsonl" } ?? "")
+                _ = SidecarMigration.migrate(from: SyncFolder(root: source), to: destination, onlyLog: "\(device).jsonl")
             }
             return target
         }
