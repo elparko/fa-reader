@@ -161,11 +161,11 @@ Annotations made in rapid runs are grouped as a burst: at least 15 annotations w
 
 ## Markdown export format
 
-One file per section (for example `24 Endocrine.md`), in the book's `markdown/` folder. The files update automatically about a second after any highlight change; File > Export Markdown does the same on demand. If you choose an export folder, each book gets its own subfolder there. Re-running the export rewrites only files whose content changed. It deletes a file it created only when that section has no highlights left and you have written nothing in the file. Files without the `fa-reader-export: 1` line are never touched.
+One file per section (for example `24 Endocrine.md`), in the book's `markdown/` folder. The files update automatically about a second after any highlight change; File > Export Markdown does the same on demand. If you choose an export folder, each book gets its own subfolder there. Re-running the export rewrites only files whose content changed. It deletes a file it created only when that section has no highlights left and you have written nothing in the file. Files without the `rowlight-export: 1` line are never touched. The app also accepts the older `fa-reader-export: 1` line and replaces it with the new one when it rewrites the file.
 
 ```
 ---
-fa-reader-export: 1
+rowlight-export: 1
 book: "Guide"
 section: "Endocrine"
 parent: "Section III: High-Yield Organ Systems"
