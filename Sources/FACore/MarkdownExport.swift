@@ -35,11 +35,11 @@ public enum MarkdownExporter {
     public static let notesHeading = "## Notes"
 
     public static func render(section: Section, highlights: [Highlight], printedPage: (Int) -> String?, pdf: URL? = nil, bookID: String? = nil) -> String {
-        merge(existing: nil, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf, bookID: bookID)
+        merge(existing: nil, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf, bookID: bookID)!
     }
 
     public static func merge(existing: String?, section: Section, highlights: [Highlight],
-                             printedPage: (Int) -> String?, pdf: URL? = nil, bookID: String? = nil) -> String {
+                             printedPage: (Int) -> String?, pdf: URL? = nil, bookID: String? = nil) -> String? {
         var out = "---\n\(marker)\n"
         if let pdf { out += "book: \(quoted(pdf.deletingPathExtension().lastPathComponent))\n" }
         out += "section: \(quoted(section.title))\n"
@@ -62,10 +62,40 @@ public enum MarkdownExporter {
         if !highlights.isEmpty { block += "\n" }
         block += blockEnd + "\n"
 
-        if let existing, let parts = split(existing) {
+        if let existing, !existing.isEmpty {
+            guard let parts = split(existing) else { return nil }
             return out + parts.before + block + parts.after
         }
         return out + "# \(section.title)\n\n" + block + "\n" + notesHeading + "\n\n"
+    }
+
+    public enum ExistingFile {
+        case missing
+        case text(String)
+        case blocked
+    }
+
+    public static func readExisting(at url: URL) -> ExistingFile {
+        let fm = FileManager.default
+        let placeholder = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).icloud")
+        let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+        let notCurrent = values?.isUbiquitousItem == true && values?.ubiquitousItemDownloadingStatus != .current
+        if notCurrent || fm.fileExists(atPath: placeholder.path) {
+            try? fm.startDownloadingUbiquitousItem(at: url)
+            return .blocked
+        }
+        guard fm.fileExists(atPath: url.path) else { return .missing }
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return .blocked }
+        return .text(text)
+    }
+
+    static func coordinated(_ url: URL, options: NSFileCoordinator.WritingOptions, _ body: (URL) throws -> Void) throws {
+        var coordinationError: NSError?
+        var thrown: Error?
+        NSFileCoordinator().coordinate(writingItemAt: url, options: options, error: &coordinationError) { target in
+            do { try body(target) } catch { thrown = error }
+        }
+        if let error = coordinationError ?? thrown { throw error }
     }
 
     public static func hasUserContent(_ text: String) -> Bool {
@@ -112,16 +142,21 @@ public enum MarkdownExporter {
         for section in sections {
             let name = fileName(for: section)
             let url = directory.appendingPathComponent(name)
-            let existing = try? String(contentsOf: url, encoding: .utf8)
+            var existing: String?
+            switch readExisting(at: url) {
+            case .blocked: continue
+            case .text(let text): existing = text
+            case .missing: break
+            }
             if let existing, !hasMarker(existing) { continue }
             let highlights = grouped[section.id] ?? []
             guard !highlights.isEmpty || existing.map(hasUserContent) == true else { continue }
             current.insert(name)
-            let text = merge(existing: existing, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf, bookID: bookID)
+            guard let text = merge(existing: existing, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf, bookID: bookID) else { continue }
             if existing == text {
                 result.unchanged.append(name)
             } else {
-                try Data(text.utf8).write(to: url, options: .atomic)
+                try coordinated(url, options: .forReplacing) { try Data(text.utf8).write(to: $0, options: .atomic) }
                 result.written.append(name)
             }
         }
@@ -130,7 +165,7 @@ public enum MarkdownExporter {
         for name in files where !current.contains(name) {
             let url = directory.appendingPathComponent(name)
             guard let text = try? String(contentsOf: url, encoding: .utf8), hasMarker(text), !hasUserContent(text) else { continue }
-            try fm.removeItem(at: url)
+            try coordinated(url, options: .forDeleting) { try fm.removeItem(at: $0) }
             result.removed.append(name)
         }
         return result

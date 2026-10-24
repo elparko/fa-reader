@@ -1738,7 +1738,8 @@ final class AppModel: ObservableObject {
                 NSWorkspace.shared.activateFileViewerSelecting([dir])
             }
         } catch {
-            notify("Export failed", info: "\(error)")
+            NSLog("Rowlight markdown export failed: %@", "\(error)")
+            notify("Export failed", info: "Rowlight could not save the notes file.")
         }
     }
 }
@@ -1863,13 +1864,25 @@ extension AppModel {
             return
         }
         let url = dir.appendingPathComponent(MarkdownExporter.fileName(for: section))
-        let existing = try? String(contentsOf: url, encoding: .utf8)
+        var existing: String?
+        switch MarkdownExporter.readExisting(at: url) {
+        case .blocked:
+            NSLog("Rowlight notes file is unreadable or not downloaded: %@", url.path)
+            notesURL = nil
+            notesTitle = section.title
+            if !marky.text.isEmpty { marky.text = "" }
+            return
+        case .text(let content): existing = content
+        case .missing: break
+        }
         var text = existing ?? ""
         if existing == nil || existing.map(MarkdownExporter.hasMarker) == true {
             let highlights = ((try? store.highlights()) ?? []).filter { section.pages.contains($0.page) }
-            text = MarkdownExporter.merge(existing: existing, section: section, highlights: highlights,
-                                          printedPage: { [weak self] in self?.printed($0) }, pdf: pdfURL, bookID: currentBookID)
-            if existing != nil, existing != text { try? Data(text.utf8).write(to: url, options: .atomic) }
+            if let merged = MarkdownExporter.merge(existing: existing, section: section, highlights: highlights,
+                                                   printedPage: { [weak self] in self?.printed($0) }, pdf: pdfURL, bookID: currentBookID) {
+                text = merged
+                if existing != nil, existing != text { try? Data(text.utf8).write(to: url, options: .atomic) }
+            }
         }
         notesURL = url
         notesTitle = section.title

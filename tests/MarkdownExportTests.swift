@@ -228,3 +228,45 @@ private func read(_ dir: URL, _ name: String) throws -> String {
     #expect(!MarkdownExporter.hasUserContent(fresh))
     #expect(MarkdownExporter.hasUserContent(fresh + "RTA type 1 = distal\n"))
 }
+
+private let renalSection = Section(id: 1, title: "Renal", start: 0, end: 9)
+
+@Test func mergeSkipsWhenStartMarkerIsMissing() {
+    let fresh = MarkdownExporter.render(section: renalSection, highlights: [], printedPage: { _ in nil })
+    let damaged = fresh.replacingOccurrences(of: MarkdownExporter.blockStart, with: "") + "My own notes\n"
+    #expect(MarkdownExporter.merge(existing: damaged, section: renalSection, highlights: [], printedPage: { _ in nil }) == nil)
+}
+
+@Test func mergeSkipsWhenEndMarkerIsMissing() {
+    let fresh = MarkdownExporter.render(section: renalSection, highlights: [], printedPage: { _ in nil })
+    let damaged = fresh.replacingOccurrences(of: MarkdownExporter.blockEnd, with: "") + "My own notes\n"
+    #expect(MarkdownExporter.merge(existing: damaged, section: renalSection, highlights: [], printedPage: { _ in nil }) == nil)
+}
+
+@Test func exportLeavesUnsplittableAndUnreadableFilesUnchanged() throws {
+    let store = try makeStore()
+    let dir = outputDir()
+    _ = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    let bio = dir.appendingPathComponent("00 Biochemistry.md")
+    let original = try String(contentsOf: bio, encoding: .utf8)
+
+    let noEnd = original.replacingOccurrences(of: MarkdownExporter.blockEnd, with: "") + "Keep me.\n"
+    try noEnd.write(to: bio, atomically: true, encoding: .utf8)
+    _ = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    #expect(try String(contentsOf: bio, encoding: .utf8) == noEnd)
+
+    var bytes = Data(original.utf8)
+    bytes.append(contentsOf: [0xFF, 0xFE, 0xC0])
+    try bytes.write(to: bio)
+    _ = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    #expect(try Data(contentsOf: bio) == bytes)
+}
+
+@Test func normalMergeKeepsNotesAndUpdatesHighlights() {
+    let fresh = MarkdownExporter.render(section: renalSection, highlights: [], printedPage: { _ in nil })
+    let existing = fresh + "My notes\n"
+    let merged = MarkdownExporter.merge(existing: existing, section: renalSection, highlights: [hl("a", page: 1, text: "Nephron")], printedPage: { _ in nil })
+    #expect(merged?.contains("My notes\n") == true)
+    #expect(merged?.contains("Nephron") == true)
+    #expect(merged?.contains("highlights: 1\n") == true)
+}

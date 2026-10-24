@@ -64,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         AppModel.shared.flushNote()
+        AppModel.shared.saveNotes()
         AppModel.shared.flushLog()
     }
 }
