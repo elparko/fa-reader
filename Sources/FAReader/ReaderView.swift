@@ -390,10 +390,19 @@ struct ContentView: View {
                 .overlay(alignment: .bottom) { UndoNotice(model: model) }
                 .overlay {
                     if model.document == nil {
-                        VStack(spacing: 12) {
-                            Text("No PDF open")
-                            Button("Open…") { model.openPanel() }
+                        VStack(spacing: 14) {
+                            Text(Branding.displayName)
+                                .font(.largeTitle.weight(.semibold))
+                            Text("Open a PDF to read, highlight, and keep notes.")
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                            Button("Open PDF…") { model.openPanel() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.large)
                         }
+                        .padding(32)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(.background)
                     }
                 }
                 .frame(minWidth: 300)

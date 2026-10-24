@@ -12,5 +12,6 @@ for s in 16 32 128 256 512; do
 done
 iconutil -c icns "$set_dir" -o Resources/AppIcon.icns
 cp "$tmp/icon.png" Resources/AppIcon.png
+cp "$tmp/icon.png" Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 rm -rf "$tmp"
 echo Resources/AppIcon.icns

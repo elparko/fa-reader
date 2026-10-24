@@ -7,10 +7,24 @@ app="build/FA Reader.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+cp Resources/PrivacyInfo.xcprivacy "$app/Contents/Resources/PrivacyInfo.xcprivacy"
 cp "$bin/FAReader" "$app/Contents/MacOS/FAReader"
 cp Resources/Info.plist "$app/Contents/Info.plist"
+brand_value() { sed -n "s/^$1 = //p" Config/Brand.xcconfig | head -n 1; }
+name=$(brand_value PRODUCT_NAME)
+bundle=$(brand_value PRODUCT_BUNDLE_IDENTIFIER)
+marketing=$(brand_value MARKETING_VERSION)
+copyright=$(brand_value FA_COPYRIGHT)
 build=$(git rev-list --count HEAD 2>/dev/null || echo 0)
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" -c "Set :CFBundleShortVersionString 1.$build" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy \
+  -c "Set :CFBundleName $name" \
+  -c "Set :CFBundleDisplayName $name" \
+  -c "Set :CFBundleIdentifier $bundle" \
+  -c "Set :CFBundleShortVersionString $marketing" \
+  -c "Set :CFBundleVersion $build" \
+  -c "Set :NSHumanReadableCopyright $copyright" \
+  -c "Set :CFBundleURLTypes:0:CFBundleURLName $bundle" \
+  "$app/Contents/Info.plist"
 codesign --force --sign - "$app"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 echo "$app"

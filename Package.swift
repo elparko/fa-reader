@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .executable(name: "FAReader", targets: ["FAReader"]),
         .library(name: "FACore", targets: ["FACore"]),
+        .library(name: "md4c", targets: ["md4c"]),
     ],
     targets: [
         .target(name: "FACore", linkerSettings: [.linkedLibrary("sqlite3")]),

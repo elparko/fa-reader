@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import FACore
 import PDFKit
@@ -699,7 +700,8 @@ final class SelfCheck {
             await waitFor { model.pdfURL == other }
             await pause(0.3)
             check("opening another PDF switches book", model.pdfURL == other && model.pageCount == 1, model.bookTitle)
-            check("each book has its own data folder", model.store?.folder.root.lastPathComponent == "one.fa-reader")
+            let folderName = model.store?.folder.root.lastPathComponent ?? ""
+            check("each book has its own data folder", folderName == "one.fa-reader" || BookIdentity.isContentHash(folderName), folderName)
             let link = MarkdownExporter.link(page: 412, pdf: original)
             NSApp.delegate?.application?(NSApp, open: [URL(string: link)!])
             await waitFor { model.pdfURL == original }
@@ -710,3 +712,4 @@ final class SelfCheck {
         }
     }
 }
+#endif

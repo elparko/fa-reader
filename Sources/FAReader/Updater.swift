@@ -1,3 +1,4 @@
+#if !APPSTORE
 import AppKit
 
 struct Release {
@@ -65,7 +66,7 @@ enum Updater {
             return
         }
         guard release.build > currentBuild else {
-            if interactive { alert("FA Reader is up to date", "You have build \(currentBuild), the newest.") }
+            if interactive { alert("\(Branding.displayName) is up to date", "You have build \(currentBuild), the newest.") }
             return
         }
         let a = NSAlert()
@@ -121,3 +122,4 @@ enum Updater {
         a.runModal()
     }
 }
+#endif

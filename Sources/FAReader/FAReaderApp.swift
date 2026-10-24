@@ -7,7 +7,7 @@ struct FAReaderApp: App {
     @StateObject private var model = AppModel.shared
 
     var body: some Scene {
-        Window("FA Reader", id: "main") {
+        Window(LocalizedStringKey(stringLiteral: Branding.displayName), id: "main") {
             ContentView(model: model)
                 .frame(minWidth: 480, minHeight: 400)
         }
@@ -29,7 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if AppModel.shared.selfCheck != nil || AppModel.shared.measureOpen {
+#if DEBUG
+        let headless = AppModel.shared.selfCheck != nil || AppModel.shared.measureOpen
+#else
+        let headless = AppModel.shared.measureOpen
+#endif
+        if headless {
             NSApp.setActivationPolicy(.accessory)
             for window in NSApp.windows where !CommandLine.arguments.contains("--visible") {
                 window.alphaValue = 0
@@ -38,8 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
+#if !APPSTORE
             Updater.checkDaily()
+#endif
         }
+#if !APPSTORE
         if CommandLine.arguments.contains("--print-update") {
             Task {
                 let token = Updater.token()
@@ -49,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 exit(0)
             }
         }
+#endif
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -63,15 +72,17 @@ struct AppCommands: Commands {
     @ObservedObject var model: AppModel
 
     var body: some Commands {
+#if !APPSTORE
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") { Task { await Updater.check(interactive: true) } }
         }
+#endif
         CommandGroup(replacing: .newItem) {
             Button("Open…") { model.openPanel() }
                 .keyboardShortcut("o")
             Menu("Open Recent") {
-                ForEach(model.recentBooks, id: \.self) { path in
-                    Button((path as NSString).lastPathComponent) { model.openRecent(path) }
+                ForEach(model.recentBooks) { book in
+                    Button(book.name) { model.openRecent(book) }
                 }
                 Divider()
                 Button("Clear Menu") { model.clearRecent() }
@@ -80,6 +91,8 @@ struct AppCommands: Commands {
         CommandGroup(after: .importExport) {
             Divider()
             Button("Import from Preview…") { model.beginImport() }
+                .disabled(model.store == nil)
+            Button("Import Highlights from Folder…") { model.importSidecarFolder() }
                 .disabled(model.store == nil)
             Button("Export Markdown") { model.exportMarkdown() }
                 .keyboardShortcut("e", modifiers: [.command, .shift])

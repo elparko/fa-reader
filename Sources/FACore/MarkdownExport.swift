@@ -9,9 +9,12 @@ public struct ExportResult: Equatable {
 public enum MarkdownExporter {
     public static let marker = "fa-reader-export: 1"
 
-    public static func link(page: Int, highlight: String? = nil, pdf: URL? = nil) -> String {
+    public static func link(page: Int, highlight: String? = nil, pdf: URL? = nil, bookID: String? = nil) -> String {
         var s = "fa-reader://open?page=\(page + 1)"
         if let highlight { s += "&highlight=\(highlight)" }
+        if let bookID, let id = bookID.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) {
+            s += "&book=\(id)"
+        }
         if let pdf, let path = pdf.path.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) {
             s += "&pdf=\(path)"
         }
@@ -31,12 +34,12 @@ public enum MarkdownExporter {
     public static let blockEnd = "<!-- fa-reader:highlights:end -->"
     public static let notesHeading = "## Notes"
 
-    public static func render(section: Section, highlights: [Highlight], printedPage: (Int) -> String?, pdf: URL? = nil) -> String {
-        merge(existing: nil, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf)
+    public static func render(section: Section, highlights: [Highlight], printedPage: (Int) -> String?, pdf: URL? = nil, bookID: String? = nil) -> String {
+        merge(existing: nil, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf, bookID: bookID)
     }
 
     public static func merge(existing: String?, section: Section, highlights: [Highlight],
-                             printedPage: (Int) -> String?, pdf: URL? = nil) -> String {
+                             printedPage: (Int) -> String?, pdf: URL? = nil, bookID: String? = nil) -> String {
         var out = "---\n\(marker)\n"
         if let pdf { out += "book: \(quoted(pdf.deletingPathExtension().lastPathComponent))\n" }
         out += "section: \(quoted(section.title))\n"
@@ -53,7 +56,7 @@ public enum MarkdownExporter {
                 block += "\n## PDF p. \(page + 1)\n"
             }
             for h in byPage[page]!.sorted(by: readingOrder) {
-                block += line(h, pdf: pdf)
+                block += line(h, pdf: pdf, bookID: bookID)
             }
         }
         if !highlights.isEmpty { block += "\n" }
@@ -90,12 +93,12 @@ public enum MarkdownExporter {
     }
 
     public static func export(store: Store, sections: [Section], to directory: URL,
-                              printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil) throws -> ExportResult {
-        try export(highlights: store.highlights(), sections: sections, to: directory, printedPage: printedPage, pdf: pdf)
+                              printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil, bookID: String? = nil) throws -> ExportResult {
+        try export(highlights: store.highlights(), sections: sections, to: directory, printedPage: printedPage, pdf: pdf, bookID: bookID)
     }
 
     public static func export(highlights: [Highlight], sections: [Section], to directory: URL,
-                              printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil) throws -> ExportResult {
+                              printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil, bookID: String? = nil) throws -> ExportResult {
         var grouped: [Int: [Highlight]] = [:]
         for h in highlights {
             if let s = Sections.section(for: h.page, in: sections) { grouped[s.id, default: []].append(h) }
@@ -114,7 +117,7 @@ public enum MarkdownExporter {
             let highlights = grouped[section.id] ?? []
             guard !highlights.isEmpty || existing.map(hasUserContent) == true else { continue }
             current.insert(name)
-            let text = merge(existing: existing, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf)
+            let text = merge(existing: existing, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf, bookID: bookID)
             if existing == text {
                 result.unchanged.append(name)
             } else {
@@ -153,8 +156,8 @@ public enum MarkdownExporter {
             .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    private static func line(_ h: Highlight, pdf: URL?) -> String {
-        let open = "[open](\(link(page: h.page, highlight: h.id, pdf: pdf))) <!-- fa:\(h.id) -->"
+    private static func line(_ h: Highlight, pdf: URL?, bookID: String?) -> String {
+        let open = "[open](\(link(page: h.page, highlight: h.id, pdf: pdf, bookID: bookID))) <!-- fa:\(h.id) -->"
         if h.highlightColor == .noteOnly {
             return "- Note: \(oneLine(h.note).replacingOccurrences(of: "==", with: "\\=\\=")) \(open)\n"
         }
