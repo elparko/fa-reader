@@ -332,7 +332,11 @@ private func logText(_ folder: SyncFolder, _ device: String) throws -> [String] 
     #expect(try BookIdentity.contentHash(of: one) != BookIdentity.contentHash(of: two))
 }
 
+private let pdfKitLock = NSLock()
+
 private func makePDF(at url: URL, pages: Int) throws {
+    pdfKitLock.lock()
+    defer { pdfKitLock.unlock() }
     let document = PDFDocument()
     for index in 0..<pages {
         let image = NSImage(size: NSSize(width: 200, height: 200), flipped: false) { rect in
@@ -346,6 +350,8 @@ private func makePDF(at url: URL, pages: Int) throws {
 }
 
 private func annotate(_ url: URL) throws {
+    pdfKitLock.lock()
+    defer { pdfKitLock.unlock() }
     let document = try #require(PDFDocument(url: url))
     let page = try #require(document.page(at: 0))
     let note = PDFAnnotation(bounds: CGRect(x: 10, y: 10, width: 50, height: 20), forType: .highlight, withProperties: nil)
