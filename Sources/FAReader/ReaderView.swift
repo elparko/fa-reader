@@ -420,12 +420,15 @@ struct ContentView: View {
                             Label("Highlighter", systemImage: "highlighter")
                         }
                         .toggleStyle(.button)
+                        .disabled(model.document == nil)
                         .help(model.highlighterOn ? "Highlighter on: selected text is highlighted \(model.penColor.name). Esc turns it off."
                                                   : "Highlighter off: turn on to highlight text as you select it")
                         ForEach(HighlightColor.highlightColors, id: \.self) { c in
                             Button { model.toolbarColor(c) } label: {
                                 ColorDot(color: c, current: model.penColor == c, armed: model.highlighterOn)
                             }
+                            .accessibilityLabel(c.name.capitalized)
+                            .disabled(model.document == nil)
                             .help("\(c.name.capitalized) (⌘\(c.rawValue))")
                         }
                     }
@@ -433,8 +436,10 @@ struct ContentView: View {
                         ControlGroup {
                             Button { model.zoomOut() } label: { Image(systemName: "minus.magnifyingglass") }
                                 .help("Zoom out (Cmd+-)")
+                                .disabled(model.document == nil)
                             Button { model.zoomIn() } label: { Image(systemName: "plus.magnifyingglass") }
                                 .help("Zoom in (Cmd+=)")
+                                .disabled(model.document == nil)
                         }
                         Button { model.showHighlightList() } label: {
                             Label("Highlights", systemImage: "list.bullet.rectangle")
@@ -442,11 +447,13 @@ struct ContentView: View {
                         .help("List highlights by color, section and page (⇧⌘H)")
                         Toggle(isOn: $model.notesShown) { Label("Notes", systemImage: "note.text") }
                             .toggleStyle(.button)
+                            .disabled(model.document == nil)
                             .help("Show the markdown notes for this section (Cmd+Option+N)")
                         Menu {
                             Button("Actual Size") { model.actualSize() }
                             Button("Fit Width") { model.fitWidth() }
                         } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                            .disabled(model.document == nil)
                             .help("Zoom options")
                     }
                 }
@@ -551,8 +558,23 @@ private struct BarCell: View {
             }
         }
         .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(item == .divider ? [] : .isButton)
+        .accessibilityLabel(label)
+        .accessibilityAction { model.barAction(item) }
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.1), value: hovering)
+    }
+
+    private var label: String {
+        switch item {
+        case .color(let c): return c.name.capitalized
+        case .divider: return ""
+        case .erase: return "Remove highlighting"
+        case .note: return model.selected?.note.isEmpty == false ? "Edit note" : "Add note"
+        case .copy: return "Copy highlighted text"
+        case .delete: return "Delete highlight"
+        }
     }
 
     private func icon(_ name: String) -> some View {

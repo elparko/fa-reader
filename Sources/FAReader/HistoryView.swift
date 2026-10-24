@@ -62,14 +62,14 @@ struct HistoryView: View {
                 Text(timeRange(s)).font(.caption).foregroundStyle(.secondary)
             }
             let first = s.pages.prefix(5).map { model.label($0) }.joined(separator: ", ")
-            Text("\(s.opCount) changes on \(s.pages.count) pages: \(first)\(s.pages.count > 5 ? ", …" : "")")
+            Text("\(s.opCount) \(s.opCount == 1 ? "change" : "changes") on \(s.pages.count) \(s.pages.count == 1 ? "page" : "pages"): \(first)\(s.pages.count > 5 ? ", …" : "")")
                 .font(.callout)
             if let undone = undoneText(s) {
                 Text(undone).font(.caption).foregroundStyle(.orange)
             }
             if let p = model.pendingUndo, p.sessionID == s.id {
                 HStack {
-                    Text("\(p.revert) changes will be reverted. \(p.skipped) skipped because later work changed them.")
+                    Text("\(p.revert) \(p.revert == 1 ? "change" : "changes") will be reverted. \(p.skipped) skipped because later work changed them.")
                         .font(.caption)
                     Spacer()
                     Button("Cancel") { model.pendingUndo = nil }
