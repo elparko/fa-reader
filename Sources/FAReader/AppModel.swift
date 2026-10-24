@@ -1,5 +1,7 @@
 import AppKit
+import CryptoKit
 import FACore
+import IOKit
 import PDFKit
 import SwiftUI
 
@@ -407,8 +409,9 @@ final class AppModel: ObservableObject {
 
     private func finishOpen(_ url: URL, loaded: LoadedBook?, scope: FileScope, bookmark: Data?, completion: (() -> Void)?) {
         guard let loaded else {
+            let reason = OpenFailure.reason(for: url)
             stopScope(scope)
-            notify("Cannot open \(url.lastPathComponent)", info: OpenFailure.reason(for: url))
+            notify("Cannot open \(url.lastPathComponent)", info: reason)
             return
         }
         let doc = loaded.document
@@ -417,7 +420,8 @@ final class AppModel: ObservableObject {
             newStore = try loaded.store.get()
         } catch {
             stopScope(scope)
-            notify("Cannot open the annotation store", info: "\(error)")
+            NSLog("Cannot open the annotation store: \(error)")
+            notify("Cannot open the annotation store", info: "The annotation file could not be read. Close the book and open it again.")
             return
         }
         searchSeq += 1
@@ -471,10 +475,23 @@ final class AppModel: ObservableObject {
     }
 
     private var deviceID: String {
-        if let id = UserDefaults.standard.string(forKey: "deviceID") { return id }
-        let id = UUID().uuidString.lowercased()
-        UserDefaults.standard.set(id, forKey: "deviceID")
-        return id
+        let defaults = UserDefaults.standard
+        let resolved = DeviceIdentity.resolve(
+            storedID: defaults.string(forKey: "deviceID"),
+            storedMachineHash: defaults.string(forKey: "deviceMachineHash"),
+            currentMachineHash: Self.currentMachineHash())
+        defaults.set(resolved.id, forKey: "deviceID")
+        if let hash = resolved.machineHash { defaults.set(hash, forKey: "deviceMachineHash") }
+        return resolved.id
+    }
+
+    private static func currentMachineHash() -> String? {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+        guard let uuid = IORegistryEntryCreateCFProperty(service, kIOPlatformUUIDKey as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? String else { return nil }
+        return SHA256.hash(data: Data(uuid.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func loadRecents() -> [SavedBookmark] {
@@ -502,10 +519,10 @@ final class AppModel: ObservableObject {
         if let saved = BookmarkLibrary.lastBook(from: .standard), let resolved = try? BookmarkStore.resolve(saved.data) {
             let scope = startScope(resolved.url)
             let exists = FileManager.default.fileExists(atPath: resolved.url.path)
+            var data = saved.data
+            if exists, resolved.isStale, let fresh = try? BookmarkStore.data(for: resolved.url) { data = fresh }
             stopScope(scope)
             if exists {
-                var data = saved.data
-                if resolved.isStale, let fresh = try? BookmarkStore.data(for: resolved.url) { data = fresh }
                 return RestoredBook(url: resolved.url, bookmark: data, bookID: saved.bookID)
             }
         }
@@ -1484,6 +1501,7 @@ final class AppModel: ObservableObject {
             open(url)
             return
         }
+        guard ["rowlight", "fa-reader"].contains(url.scheme?.lowercased()) else { return }
         guard let link = ReaderLinkResolver.parse(url) else { return }
         guard !isLoading else { pendingURL = url; return }
         if openLinkedBook(link) { return }
@@ -1507,10 +1525,10 @@ final class AppModel: ObservableObject {
             guard let resolved = try? BookmarkStore.resolve(saved.data) else { return false }
             let scope = startScope(resolved.url)
             let exists = FileManager.default.fileExists(atPath: resolved.url.path)
+            var data = saved.data
+            if exists, resolved.isStale, let fresh = try? BookmarkStore.data(for: resolved.url) { data = fresh }
             stopScope(scope)
             guard exists else { return false }
-            var data = saved.data
-            if resolved.isStale, let fresh = try? BookmarkStore.data(for: resolved.url) { data = fresh }
             open(resolved.url, knownBookmark: data, knownBookID: saved.bookID) { [weak self] in self?.jump(to: link) }
             return true
         }
@@ -1525,12 +1543,14 @@ final class AppModel: ObservableObject {
     private func jump(to link: ReaderLink) {
         if let id = link.highlight, let h = try? store?.highlight(id: id) {
             goToHighlight(id: id, page: h.page)
-        } else if let page = link.page {
+        } else if let page = link.page, page >= 1, page <= (document?.pageCount ?? 0) {
             goTo(page: page - 1)
         }
         if isTestRun {
+            #if DEBUG
             print("handled_url book=\(pdfURL?.lastPathComponent ?? "") page=\(currentPageIndex)")
             fflush(stdout)
+            #endif
         } else {
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -1755,14 +1775,14 @@ extension AppModel {
         }
         let scope = startScope(resolved.url)
         let exists = FileManager.default.fileExists(atPath: resolved.url.path)
+        var data = book.data
+        if exists, resolved.isStale, let fresh = try? BookmarkStore.data(for: resolved.url) { data = fresh }
         stopScope(scope)
         guard exists else {
             dropRecent(book)
             notify("\(book.name) is no longer available", info: resolved.url.path)
             return
         }
-        var data = book.data
-        if resolved.isStale, let fresh = try? BookmarkStore.data(for: resolved.url) { data = fresh }
         open(resolved.url, knownBookmark: data, knownBookID: book.bookID)
     }
 
