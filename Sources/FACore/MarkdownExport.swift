@@ -43,12 +43,15 @@ public enum MarkdownExporter {
     public static func merge(existing: String?, section: Section, highlights: [Highlight],
                              printedPage: (Int) -> String?, pdf: URL? = nil, bookID: String? = nil) -> String? {
         var out = "---\n\(marker)\n"
+        var written: Set<String> = ["section", "pdf-pages", "highlights"]
+        if pdf != nil { written.insert("book") }
+        if section.parent != nil { written.insert("parent") }
         if let pdf { out += "book: \(quoted(pdf.deletingPathExtension().lastPathComponent))\n" }
         out += "section: \(quoted(section.title))\n"
         if let parent = section.parent { out += "parent: \(quoted(parent))\n" }
         out += "pdf-pages: \(section.start + 1)-\(section.end + 1)\n"
         out += "highlights: \(highlights.count)\n"
-        if let existing { for extra in extraFrontMatter(existing) { out += extra + "\n" } }
+        if let existing { for extra in extraFrontMatter(existing, dropping: written) { out += extra + "\n" } }
         out += "---\n"
 
         var block = blockStart + "\n"
@@ -103,6 +106,7 @@ public enum MarkdownExporter {
     }
 
     public static func hasUserContent(_ text: String) -> Bool {
+        if extraFrontMatter(text, dropping: generatedKeys).contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) { return true }
         guard let parts = split(text) else { return !body(text).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let rest = (parts.before + parts.after).split(separator: "\n").filter { line in
             let t = line.trimmingCharacters(in: .whitespaces)
@@ -111,13 +115,14 @@ public enum MarkdownExporter {
         return !rest.isEmpty
     }
 
-    private static func extraFrontMatter(_ text: String) -> [String] {
+    private static func extraFrontMatter(_ text: String, dropping keys: Set<String>) -> [String] {
         guard text.hasPrefix("---\n") else { return [] }
         var extras: [String] = []
         for l in text.split(separator: "\n", omittingEmptySubsequences: false).dropFirst() {
             if l == "---" { break }
             if l == Substring(marker) || l == Substring(oldMarker) { continue }
-            if let key = l.split(separator: ":", maxSplits: 1).first, generatedKeys.contains(String(key)) { continue }
+            if let key = l.split(separator: ":", maxSplits: 1).first,
+               keys.contains(String(key).trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "\"'")))) { continue }
             extras.append(String(l))
         }
         return extras
