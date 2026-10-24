@@ -121,7 +121,8 @@ PR #1 was open, not merged, and nobody had compiled it. Its body says so. Result
 ## Trademarks
 
 - "First Aid" appears only in code comments (`PageGeometry.swift:34, 68`) and test data. "Pathoma" appears only in test data. Users never see these.
-- No screenshots are in the repo. The App Store screenshots must not show a First Aid or other third-party book.
+- No screenshots are in the repo. Three App Store screenshots (2880x1800) were made with an original 30-page sample PDF, "Cardiovascular Physiology — Lecture Notes", written for this purpose. They were checked by eye: no third-party book, brand, or exam name, no personal paths, and no hashtags.
+- The notes pane shows the export front matter, which includes the key `fa-reader-export: 1` (screenshot 3). It is the old internal name, and users can see it. Renaming the key needs the reader to accept both keys, because older notes files use the old one.
 
 ## Tests added
 
