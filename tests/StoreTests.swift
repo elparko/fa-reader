@@ -1104,23 +1104,26 @@ private func remoteLog(_ source: SyncFolder = tempFolder()) throws -> (lines: [S
     #expect(try p.a.db.scalar("SELECT offset FROM sync_offsets WHERE file='mac-x.jsonl'") as? Int64 == Int64(data.count))
 }
 
-@Test func sequenceAfterRecreatedDatabaseExceedsTheLog() throws {
+@Test func sequenceExceedsLogsTheStoreHasNotReadAndTheStoredMaximum() throws {
+    let other = tempFolder()
+    let source = try makeStore(other)
+    try source.add([makeHighlight("a")])
+    try source.add([makeHighlight("b", page: 2)])
+    let unread = try logObjects(other, device: "mac-a").compactMap { ($0["op"] as? [String: Any])?["seq"] as? Int }
+    #expect(unread.count == 2)
+
     let folder = tempFolder()
     let clock = TestClock()
-    let first = try makeStore(folder, clock: clock)
-    try first.add([makeHighlight("a")])
-    try first.add([makeHighlight("b", page: 2)])
-    let logged = try logObjects(folder, device: "mac-a").compactMap { ($0["op"] as? [String: Any])?["seq"] as? Int }
-    let fm = FileManager.default
-    for name in try fm.contentsOfDirectory(atPath: folder.localURL.path) {
-        try fm.removeItem(atPath: folder.localURL.path + "/" + name)
-    }
-    let second = try makeStore(folder, clock: clock)
+    let store = try makeStore(folder, clock: clock)
+    try FileManager.default.copyItem(at: other.logURL(device: "mac-a"), to: folder.logURL(device: "mac-a"))
+    #expect(try store.db.scalar("SELECT COUNT(*) FROM ops") as? Int64 == 0)
+    try store.add([makeHighlight("c", page: 3)])
+    let newest = try #require(try store.db.scalar("SELECT MAX(seq) FROM ops WHERE device='mac-a'") as? Int64)
+    #expect(newest > Int64(unread.max()!))
     clock.minutes(60)
-    try second.add([makeHighlight("c", page: 3)])
-    let newest = try #require(try second.db.scalar("SELECT MAX(seq) FROM ops WHERE device='mac-a'") as? Int64)
-    #expect(newest > Int64(logged.max()!))
-    #expect(try second.db.scalar("SELECT COUNT(DISTINCT id) FROM ops") as? Int64 == 3)
+    try store.add([makeHighlight("d", page: 4)])
+    let after = try #require(try store.db.scalar("SELECT MAX(seq) FROM ops WHERE device='mac-a'") as? Int64)
+    #expect(after > newest)
 }
 
 @Test func corruptDatabaseIsMovedAsideAndRebuiltFromLogs() throws {
@@ -1150,4 +1153,30 @@ private func remoteLog(_ source: SyncFolder = tempFolder()) throws -> (lines: [S
     try store.add([makeHighlight("a")])
     try other.exec("COMMIT")
     #expect(try store.highlights().count == 1)
+}
+
+@Test func databaseWithADamagedDataPageIsMovedAsideAndRebuiltFromLogs() throws {
+    let folder = tempFolder()
+    let clock = TestClock()
+    let first = try makeStore(folder, clock: clock)
+    let many = (0..<400).map { makeHighlight("h\($0)", page: $0 % 15 + 1, text: String(repeating: "word ", count: 40), note: "#tag\($0)") }
+    try first.add(many)
+    let expected = try first.highlights()
+    try first.db.exec("PRAGMA wal_checkpoint(TRUNCATE)")
+    let fm = FileManager.default
+    let path = folder.databaseURL.path
+    var bytes = try Data(contentsOf: folder.databaseURL)
+    #expect(bytes.count > 8192 * 3)
+    let pageSize = 4096
+    let start = bytes.count - pageSize * 2
+    for i in start..<(start + pageSize) { bytes[i] = 0x5A }
+    for name in try fm.contentsOfDirectory(atPath: folder.localURL.path) {
+        try fm.removeItem(atPath: folder.localURL.path + "/" + name)
+    }
+    try bytes.write(to: URL(fileURLWithPath: path))
+
+    let second = try makeStore(folder, clock: clock)
+    #expect(try second.highlights() == expected)
+    let names = try fm.contentsOfDirectory(atPath: folder.localURL.path)
+    #expect(names.contains { $0.hasPrefix("fa.sqlite.corrupt-") })
 }

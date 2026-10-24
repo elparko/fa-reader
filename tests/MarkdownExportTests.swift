@@ -270,3 +270,16 @@ private let renalSection = Section(id: 1, title: "Renal", start: 0, end: 9)
     #expect(merged?.contains("Nephron") == true)
     #expect(merged?.contains("highlights: 1\n") == true)
 }
+
+@Test func exportNeitherRewritesNorRemovesABlockedFileWhoseSectionStillExists() throws {
+    let dir = outputDir()
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let file = dir.appendingPathComponent(MarkdownExporter.fileName(for: testSections[2]))
+    var bytes = Data(MarkdownExporter.render(section: testSections[2], highlights: [], printedPage: { _ in nil }).utf8)
+    bytes.append(contentsOf: [0xFF, 0xFE, 0xC0])
+    try bytes.write(to: file)
+    let result = try MarkdownExporter.export(highlights: [], sections: testSections, to: dir)
+    #expect(try Data(contentsOf: file) == bytes)
+    #expect(result.written.isEmpty)
+    #expect(result.removed.isEmpty)
+}

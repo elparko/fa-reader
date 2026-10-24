@@ -60,6 +60,9 @@ public final class Database {
         do {
             let db = try Database(path: path)
             try setup(db)
+            if let result = try db.scalar("PRAGMA quick_check") as? String, result != "ok" {
+                throw DatabaseError(message: "Database integrity check failed: \(result)", code: SQLITE_CORRUPT)
+            }
             return db
         } catch let error as DatabaseError where error.code == SQLITE_CORRUPT || error.code == SQLITE_NOTADB {
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")

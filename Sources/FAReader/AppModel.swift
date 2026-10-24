@@ -167,6 +167,8 @@ final class AppModel: ObservableObject {
     lazy var marky: MarkyView = makeMarky()
     private(set) var notesURL: URL?
     private var notesSectionID: Int?
+    private(set) var notesBlocked = false
+    private let notesWriteQueue = DispatchQueue(label: "fa-reader.notes-write", qos: .utility)
     private var notesDirty = false
     private var notesSaveWork: DispatchWorkItem?
     private var exportWork: DispatchWorkItem?
@@ -1856,7 +1858,7 @@ extension AppModel {
         m.mode = MarkyView.Mode(rawValue: notesMode) ?? .preview
         m.onTextChange = { [weak self] in self?.notesChanged() }
         m.openURL = { [weak self] url in
-            guard url.scheme == "rowlight" || url.scheme == "fa-reader" else { return false }
+            guard ["rowlight", "fa-reader"].contains(url.scheme?.lowercased() ?? "") else { return false }
             self?.handle(url: url)
             return true
         }
@@ -1874,13 +1876,25 @@ extension AppModel {
 
     func saveNotes() {
         notesSaveWork?.cancel()
-        guard notesDirty, let url = notesURL else { return }
+        guard notesDirty, !notesBlocked, let url = notesURL else { return }
         notesDirty = false
-        do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data(marky.text.utf8).write(to: url, options: .atomic)
-        } catch {
-            notify("Could not save notes", info: "\(error.localizedDescription)")
+        writeNotes(Data(marky.text.utf8), to: url)
+    }
+
+    func drainNotesWrites() {
+        notesWriteQueue.sync {}
+    }
+
+    private func writeNotes(_ data: Data, to url: URL) {
+        notesWriteQueue.async { [weak self] in
+            do {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try MarkdownExporter.coordinated(url, options: .forReplacing) { try data.write(to: $0, options: .atomic) }
+            } catch {
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { self?.notify("Could not save notes", info: "\(error.localizedDescription)") }
+                }
+            }
         }
     }
 
@@ -1890,6 +1904,8 @@ extension AppModel {
         guard force || section?.id != notesSectionID else { return }
         saveNotes()
         notesSectionID = section?.id
+        notesBlocked = false
+        marky.isReadOnly = false
         guard let section else {
             notesURL = nil
             notesTitle = "Notes"
@@ -1902,6 +1918,10 @@ extension AppModel {
         case .blocked:
             NSLog("Rowlight notes file is unreadable or not downloaded: %@", url.path)
             notesURL = nil
+            notesBlocked = true
+            marky.isReadOnly = true
+            notesSectionID = nil
+            notesDirty = false
             notesTitle = section.title
             if !marky.text.isEmpty { marky.text = "" }
             return
@@ -1914,7 +1934,7 @@ extension AppModel {
             if let merged = MarkdownExporter.merge(existing: existing, section: section, highlights: highlights,
                                                    printedPage: { [weak self] in self?.printed($0) }, pdf: pdfURL, bookID: currentBookID) {
                 text = merged
-                if existing != nil, existing != text { try? Data(text.utf8).write(to: url, options: .atomic) }
+                if existing != nil, existing != text { writeNotes(Data(text.utf8), to: url) }
             }
         }
         notesURL = url
@@ -1926,6 +1946,8 @@ extension AppModel {
     func showNotesFile(_ file: URL) {
         saveNotes()
         guard let text = try? String(contentsOf: file, encoding: .utf8) else { beep(); return }
+        notesBlocked = false
+        marky.isReadOnly = false
         notesURL = file
         notesSectionID = -1
         notesTitle = file.deletingPathExtension().lastPathComponent
