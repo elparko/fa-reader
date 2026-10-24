@@ -7,9 +7,9 @@ This pull request replaces PR #1.
 ## Summary
 
 - The App Store target builds, signs with Apple Distribution (team 74W94PA2F4, Pereste Health Inc), and exports a Mac App Store package.
-- Validate App passed: `xcrun altool --validate-app` with the App Store Connect API key returned "VERIFY SUCCEEDED with no errors" for the export of commit `4fc0cd8`.
-- The review fixed 9 blockers, 19 high findings, and 15 medium findings. 13 medium findings stay open with a recommendation.
-- Tests: after the compile fix, 205 tests passed. Now 237 Swift Testing tests and 5 XCTest tests pass (`swift test`). Debug and Release Xcode builds pass.
+- Validate App passed: `xcrun altool --validate-app` with the App Store Connect API key returned "VERIFY SUCCEEDED with no errors" for the export of commit `5d16f89`.
+- The review fixed 9 blockers, 19 high findings, and 17 medium findings. 12 medium findings stay open with a recommendation.
+- Tests: after the compile fix, 205 tests passed. Now 240 Swift Testing tests and 5 XCTest tests pass (`swift test`). Debug and Release Xcode builds pass.
 - Measured on a 1000-page PDF with 2984 highlights (MacBook Pro, M2 Max): open 0.5–0.7 s, search 9 ms median and 16 ms at the 95th percentile, full highlight rebuild 0.1 s.
 
 ## PR #1 verification
@@ -46,9 +46,9 @@ PR #1 was open, not merged, and nobody had compiled it. Its body says so. Result
 
 | # | Finding | Location | Change |
 |---|---|---|---|
-| H1 | If a notes file lost its start or end marker, export wrote a new template over all of the user's notes. | `Sources/FACore/MarkdownExport.swift:41` | Fixed. `merge` returns nil and nothing is written. |
-| H2 | A notes file that could not be read (not downloaded from iCloud, bad encoding) counted as missing, and a template replaced it. | `MarkdownExport.swift:78`, `AppModel.swift:170` | Fixed. A blocked file is never written or deleted. The download starts. The notes editor is read-only until the file can be read. |
-| H3 | The export clean-up step could delete a blocked notes file. | `MarkdownExport.swift:147` | Fixed. A blocked file counts as current. |
+| H1 | If a notes file lost its start or end marker, export wrote a new template over all of the user's notes. | `Sources/FACore/MarkdownExport.swift:43` | Fixed. `merge` returns nil and nothing is written. |
+| H2 | A notes file that could not be read (not downloaded from iCloud, bad encoding) counted as missing, and a template replaced it. | `MarkdownExport.swift:85`, `AppModel.swift:170` | Fixed. A blocked file is never written or deleted. The download starts. The notes editor is read-only until the file can be read. |
+| H3 | The export clean-up step could delete a blocked notes file. | `MarkdownExport.swift:168` | Fixed. A blocked file counts as current. |
 | H4 | Notes typed in the last 0.6 s before Quit were lost. | `FAReaderApp.swift:63` | Fixed. Quit saves the notes and waits for the write. |
 | H5 | Notes writes and the export wrote the same file on two queues with no order, and a read could run before a queued write. Recent edits could be lost. | `AppModel.swift:1922-2083` | Fixed. Notes writes, notes reads, and the export run in order on one serial queue, off the main thread. The editor is read-only while a notes file loads. |
 | H6 | In the sandboxed build, saving a PDF in Preview changed its book ID (SHA-256 of the bytes), and its highlights seemed gone. A PDFKit save also rewrites the PDF trailer ID, so that ID cannot help. | `Sources/FACore/BookStorage.swift:262`, `AppModel.swift:391` | Fixed. A known book ID from the bookmark is kept when the page count matches. An alias record in the container maps the new hash to the old ID for other Macs. Each Mac merges only its own log. |
@@ -59,7 +59,7 @@ PR #1 was open, not merged, and nobody had compiled it. Its body says so. Result
 | H11 | The log flush and log read used the main thread's SQLite connection from a background queue. They could see another thread's open transaction. | `Store.swift:7` | Fixed. They use their own connection. |
 | H12 | The first-open text index held one write transaction for the whole book. A highlight then waited up to 5 s and failed with "database is locked". | `Sources/FACore/BookIndex.swift:6` | Fixed. The index commits every 50 pages. |
 | H13 | Tidy Overlapping Highlights ran 7.5 s on the main thread (measured, 800 pages). | `Sources/FAReader/TidyPlanner.swift`, `AppModel.swift:1207, 1227` | Fixed. Planning runs in the background. The result is dropped if the book or highlights change, also after the confirm dialog. |
-| H14 | Writes into the iCloud container skipped `NSFileCoordinator`. | `BookStorage.swift:65`, `MarkdownExport.swift:92` | Fixed. Book records, copied logs, exports, and notes use coordinated writes off the main thread. |
+| H14 | Writes into the iCloud container skipped `NSFileCoordinator`. | `BookStorage.swift:65`, `MarkdownExport.swift:99` | Fixed. Book records, copied logs, exports, and notes use coordinated writes off the main thread. |
 | H15 | A stale security-scoped bookmark was re-created after access stopped, so the re-creation failed. | `AppModel.swift:537` (`restoredLastBook`), `:1565` (`openLinkedBook`), recents open | Fixed. It is re-created while access is active. |
 | H16 | Cmd-Delete deleted the selected highlight while the user typed in the notes editor or a text field. | `AppModel.swift:1248`, `FAReaderApp.swift:129` | Fixed. The action checks for a text first responder when it runs. The menu item is also disabled. |
 | H17 | New App Store users saw an "Older versions kept each book's highlights…" alert. | `AppModel.swift:622` (`maybeOfferSidecarImport`) | Fixed. The alert is not in the App Store build. File > Import Highlights from Folder… stays. |
@@ -80,7 +80,9 @@ PR #1 was open, not merged, and nobody had compiled it. Its body says so. Result
 | Alerts showed raw Swift and SQLite errors. | `AppModel.swift`, `Sources/FACore/OpenFailure.swift` | Plain messages. The detail goes to the log. |
 | Bookmark resolution could show UI or mount a volume at launch. | `Sources/FACore/Bookmarks.swift:31` | `.withoutUI` and `.withoutMounting`. |
 | A link page number was not range-checked. | `AppModel.swift:1585` (`jump(to:)`) | An out-of-range page opens the book without a jump. |
-| Exported notes used `fa-reader://` links (the old name). | `MarkdownExport.swift:13`, `Resources/Info.plist:60`, `Bookmarks.swift:84` | New exports write `rowlight://`. Both schemes open, in any letter case. Old notes keep working. |
+| The notes pane showed `fa-reader-export: 1` (the old name) at the top of each notes file. | `MarkdownExport.swift:10` | New and rewritten files use `rowlight-export: 1`. Both keys are accepted. An older installed build never overwrites or deletes a file with the new key; it stops updating that file until it is replaced by this version. When the older build rewrites a file that still has the old key, it removes the user's own front-matter keys. That is the older build's behavior and ends when every Mac runs this version. |
+| Export rewrote the front matter, so keys that the user added (for example tags) were removed. | `MarkdownExport.swift:108, 118` | Keys that the export does not write are kept, and a file whose only user content is such a key is not deleted. |
+| Exported notes used `fa-reader://` links (the old name). | `MarkdownExport.swift:15`, `Resources/Info.plist:60`, `Bookmarks.swift:84` | New exports write `rowlight://`. Both schemes open, in any letter case. Old notes keep working. |
 | Toolbar items were enabled with no book open. | `ReaderView.swift` toolbar | Disabled until a book opens. |
 | Search showed "N results, X ms" and no empty state. | `SidebarView.swift:90` | "No results", "1 result", "N results". |
 | The sidebar showed "Synced from 0 other devices". | `SidebarView.swift:68` | Hidden at 0. |
@@ -95,7 +97,6 @@ PR #1 was open, not merged, and nobody had compiled it. Its body says so. Result
 | Two Macs that edit the same note at once: the later wall-clock write wins and the other text is not shown. | `Store.swift` (note merge) | Keep both texts on conflict, or show a conflict marker. After launch. |
 | iCloud conflict versions of a notes file (`NSFileVersion`) are not merged. iCloud keeps them, so no text is deleted, but the user cannot see them. | `MarkdownExport.swift` | Save each conflict version as a visible copy. After launch. |
 | The export folder is keyed by PDF file name. Two books with the same name share files. A renamed PDF starts a new notes file. | `AppModel.swift` (export folder) | Key by book ID. Needs a migration of existing notes files. |
-| Export rewrites the front matter, so keys that the user added (Obsidian tags) are removed. | `MarkdownExport.swift` | Keep unknown keys. |
 | Remote sync apply and rebuild run on the main thread. Measured 0.1 s at 3000 highlights; the time grows with the log. | `AppModel.swift` sync, `Store.swift` rebuild | Move `Store` behind one serial queue. Needs locks on `maxApplied`, `revision`, `editSession`. After launch. |
 | The highlights panel rebuilds on each keystroke in the note editor. | `HighlightsPanel.swift` | Move `noteDraft` and index progress to a separate observable object. |
 | Tidy shows no progress for about 7 s on a large book. | `AppModel.swift` | Show the existing busy state. |
@@ -115,14 +116,14 @@ PR #1 was open, not merged, and nobody had compiled it. Its body says so. Result
 | The sidecar import prompt never runs in any build (`!APPSTORE` plus a sandbox check). | `AppModel.swift:622` (`maybeOfferSidecarImport`) | Delete it. |
 | The thumbnail crop cache and the page geometry caches have no size limit. The thumbnail image cache already has a limit of 400. | `Thumbnails.swift:42`, `PageGeometry.swift:27, 61, 71` | Use `NSCache` with a cost limit. |
 | `HighlightList` does a linear search per change. `Store` makes a JSON decoder per row. | `HighlightList.swift:61`, `Store.swift:117` | Index by ID. Reuse one decoder. |
-| Internal names (`FAReader`, `FACore`, `fa-reader-export`, block markers, queue labels). | many | Leave. Old exported files depend on the markers. |
+| Internal names (`FAReader`, `FACore`, block markers, queue labels). | many | Leave. Old exported files depend on the markers. The markers are HTML comments, so the rendered notes pane does not show them. |
+| A top-level notes file whose only user content is its own `parent:` key, with no highlights left, is still deleted by the export clean-up. | `MarkdownExport.swift:108` | Pass the section to `hasUserContent` so that it knows which keys the export writes. |
 | Window restoration, dark mode on real PDFs, VoiceOver by hand. | — | Not checked at run time. Check on the TestFlight build. |
 
 ## Trademarks
 
 - "First Aid" appears only in code comments (`PageGeometry.swift:34, 68`) and test data. "Pathoma" appears only in test data. Users never see these.
-- No screenshots are in the repo. Three App Store screenshots (2880x1800) were made with an original 30-page sample PDF, "Cardiovascular Physiology — Lecture Notes", written for this purpose. They were checked by eye: no third-party book, brand, or exam name, no personal paths, and no hashtags.
-- The notes pane shows the export front matter, which includes the key `fa-reader-export: 1` (screenshot 3). It is the old internal name, and users can see it. Renaming the key needs the reader to accept both keys, because older notes files use the old one.
+- No screenshots are in the repo. The App Store screenshots use an original 30-page sample PDF, "Cardiovascular Physiology — Lecture Notes", written for this purpose, with no third-party book, brand, or exam name. A first set showed the old `fa-reader-export` key in the notes pane, so it was deleted. The new set is captured from the final build with a separate test bundle ID, so the owner's installed app and its settings are not touched.
 
 ## Tests added
 
@@ -135,8 +136,9 @@ Storage, migrations, and sync merge:
 - Book index: more than one batch stores every page.
 - Migration: missing lines appended once; idempotent; collisions counted.
 - Book ID: kept after a PDFKit save through the known ID and the alias; a different page count does not inherit; the hash folder wins; an empty alias target is ignored; only this device's log merges.
-- Notes export: missing start or end marker, invalid UTF-8, and an iCloud placeholder all leave the file unchanged.
+- Notes export: missing start or end marker, invalid UTF-8, and an iCloud placeholder all leave the file unchanged. An old-key file gets the new key and keeps its notes. A file whose only user content is a front-matter key is not rewritten or deleted. A user key with the name of a generated key is not duplicated.
 - Links: both schemes, any case. Device ID decisions.
+- Test stability: the book storage tests saved PDFs with PDFKit from parallel tests, and PDFKit failed some of those saves. The test helpers now take a lock. 50 runs of those tests and 10 full runs pass. The app does not save PDFs, so the product code is not affected.
 
 ## Owner steps
 
