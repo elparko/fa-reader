@@ -439,7 +439,7 @@ final class AppModel: ObservableObject {
         } catch {
             stopScope(scope)
             NSLog("Cannot open the annotation store: \(error)")
-            let info = (error as? DatabaseError)?.description ?? "The annotation file could not be read. Close the book and open it again."
+            let info = (error as? DatabaseError)?.isNewerSchema == true ? "\(error)" : "The annotation file could not be read. Close the book and open it again."
             notify("Cannot open the annotation store", info: info)
             return
         }
@@ -1788,7 +1788,7 @@ final class AppModel: ObservableObject {
     }
 
     func exportMarkdown() {
-        guard store != nil, let dir = exportDirectory else { return }
+        guard let store, let dir = exportDirectory else { return }
         saveNotes()
         let highlights = allHighlights, sections = sections, pdf = pdfURL, bookID = currentBookID
         var printedPages: [Int: String] = [:]
@@ -1802,6 +1802,7 @@ final class AppModel: ObservableObject {
                 MainActor.assumeIsolated {
                     let model = AppModel.shared
                     model.stopScope(scope)
+                    if model.store === store { model.refreshNotes(force: true) }
                     switch outcome {
                     case .success(let result):
                         let alert = NSAlert()
