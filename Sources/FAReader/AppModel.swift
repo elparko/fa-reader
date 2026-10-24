@@ -375,11 +375,12 @@ final class AppModel: ObservableObject {
         let device = deviceID
         let sandboxed = AppSandbox.isActive
         let rememberedID = knownBookID
+        let priorID = knownBookID ?? recentBooks.first(where: { $0.path == url.path })?.bookID
         DispatchQueue.global(qos: .userInitiated).async {
             let loaded = PDFDocument(url: url).flatMap { doc -> LoadedBook? in
                 let sections = Sections.from(document: doc)
                 guard latest.value == token else { return nil }
-                let prepared = Result { try Self.prepareBook(pdfURL: url, sandboxed: sandboxed) }
+                let prepared = Result { try Self.prepareBook(pdfURL: url, sandboxed: sandboxed, knownBookID: priorID) }
                 let store = prepared.flatMap { prepared in
                     Result { try Store(folder: prepared.folder, device: device, deviceName: Host.current().localizedName ?? "Mac") }
                 }
@@ -405,10 +406,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    nonisolated private static func prepareBook(pdfURL: URL, sandboxed: Bool) throws -> OpenedBookData {
+    nonisolated private static func prepareBook(pdfURL: URL, sandboxed: Bool, knownBookID: String?) throws -> OpenedBookData {
         let ubiquity = sandboxed ? FileManager.default.url(forUbiquityContainerIdentifier: BookDataLocator.ubiquityContainerIdentifier) : nil
         let support = sandboxed ? try BookDataLocator.applicationSupportDirectory() : nil
-        return try BookOpener.prepare(pdfURL: pdfURL, sandboxed: sandboxed, ubiquityContainer: ubiquity, applicationSupport: support)
+        return try BookOpener.prepare(pdfURL: pdfURL, sandboxed: sandboxed, ubiquityContainer: ubiquity, applicationSupport: support, knownBookID: knownBookID)
     }
 
     private func finishOpen(_ url: URL, loaded: LoadedBook?, scope: FileScope, bookmark: Data?, completion: (() -> Void)?) {
