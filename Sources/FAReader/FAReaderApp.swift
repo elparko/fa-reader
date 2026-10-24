@@ -29,14 +29,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-#if DEBUG
-        let headless = AppModel.shared.selfCheck != nil || AppModel.shared.measureOpen
+#if !APPSTORE
+        let headless = AppModel.shared.isTestRun
 #else
         let headless = false
 #endif
         if headless {
             NSApp.setActivationPolicy(.accessory)
-#if DEBUG
+#if !APPSTORE
             for window in NSApp.windows where !CommandLine.arguments.contains("--visible") {
                 window.alphaValue = 0
                 window.ignoresMouseEvents = true

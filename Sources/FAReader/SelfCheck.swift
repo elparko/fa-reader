@@ -312,7 +312,7 @@ final class SelfCheck {
         let native = document.page(at: graves)?.annotations.filter { $0.type == "Highlight" && $0.userName?.hasPrefix("fa") != true }.count ?? -1
         check("imported Preview annotations hidden in memory", native == 0, native)
 
-        model.refreshHistory()
+        model.history = (try? store.sessions()) ?? []
         let sessions = model.history
         check("history has edit and import sessions", sessions.count == 2 && Set(sessions.map(\.kind)) == [.edit, .import],
               sessions.map { "\($0.kind) ops=\($0.opCount) pages=\($0.pages.count)" })
@@ -321,7 +321,7 @@ final class SelfCheck {
             model.confirmUndo()
             let remaining = (try? store.highlights()) ?? []
             check("undo edit session keeps later import", remaining.count == 56 && !remaining.contains { $0.id == h.id }, remaining.count)
-            model.refreshHistory()
+            model.history = (try? store.sessions()) ?? []
             check("undo is logged as its own session", model.history.contains { $0.kind == .undo && $0.undoes == edit.id })
         }
 
@@ -572,6 +572,7 @@ final class SelfCheck {
                     model.select(nil)
                     model.pdfView.clearSelection()
                     model.tidyHighlights()
+                    await model.tidyTask?.value
                     let tidied = ((try? store.highlights(page: liver)) ?? []).filter { $0.source == "app" }
                     check("Tidy splits the stack so no two highlights overlap and fragments become whole words",
                           overlapping(page: liver).isEmpty && tidied.contains { $0.highlightColor == .pink && $0.text == "centrilobular" },

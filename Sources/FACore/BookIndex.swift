@@ -11,13 +11,13 @@ public enum BookIndex {
         return rows == pageCount && stored == version
     }
 
-    public static func index(document: PDFDocument, into db: Database, progress: ((Int, Int) -> Void)? = nil) throws {
+    public static func index(document: PDFDocument, into db: Database, progress: ((Int, Int) throws -> Void)? = nil) throws {
         let count = document.pageCount
         var raw: [String] = []
         raw.reserveCapacity(count)
         for i in 0..<count {
             raw.append(document.page(at: i)?.string ?? "")
-            progress?(i + 1, count)
+            try progress?(i + 1, count)
         }
         let texts = clean(raw)
         let printed = printedLabels(texts)
