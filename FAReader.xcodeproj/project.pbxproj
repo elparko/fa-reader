@@ -12,7 +12,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		FA0000000000000000000003 /* FA Reader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FA Reader.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		FA0000000000000000000003 /* Rowlight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Rowlight.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		FA0000000000000000000009 /* Brand.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Brand.xcconfig; sourceTree = "<group>"; };
 		FA000000000000000000000A /* FAReader.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FAReader.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -80,7 +80,7 @@
 		FA0000000000000000000019 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				FA0000000000000000000003 /* FA Reader.app */,
+				FA0000000000000000000003 /* Rowlight.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -109,8 +109,8 @@
 				FA000000000000000000000C /* FACore */,
 				FA000000000000000000000D /* md4c */,
 			);
-			productName = "FA Reader";
-			productReference = FA0000000000000000000003 /* FA Reader.app */;
+			productName = "Rowlight";
+			productReference = FA0000000000000000000003 /* Rowlight.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */

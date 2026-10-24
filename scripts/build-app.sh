@@ -3,11 +3,15 @@ set -eu
 cd "$(dirname "$0")/.."
 swift build -c release --arch arm64 --arch x86_64
 bin=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
+# Folder name stays "FA Reader.app" so the updater already on other Macs, which
+# looks for that name inside the zip, can replace the app. The display name
+# written below is PRODUCT_NAME from Config/Brand.xcconfig.
 app="build/FA Reader.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 cp Resources/PrivacyInfo.xcprivacy "$app/Contents/Resources/PrivacyInfo.xcprivacy"
+cp Resources/Credits.html "$app/Contents/Resources/Credits.html"
 cp "$bin/FAReader" "$app/Contents/MacOS/FAReader"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 brand_value() { sed -n "s/^$1 = //p" Config/Brand.xcconfig | head -n 1; }

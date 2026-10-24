@@ -1,8 +1,9 @@
 // Display name and version for the Mac app.
-// PRODUCT_NAME is the one place to rename the app (the .app file and the name in menus).
-// The direct-download script reads this file. The Xcode target uses it as its base configuration.
-// Resources/Info.plist substitutes these build settings.
-PRODUCT_NAME = FA Reader
+// PRODUCT_NAME is the one place to rename what people see (Dock, menus, About).
+// The Xcode archive is $(PRODUCT_NAME).app. The direct-download script reads the
+// same name into the bundle, but keeps the file "FA Reader.app" so copies already
+// installed can still update. Resources/Info.plist substitutes these build settings.
+PRODUCT_NAME = Rowlight
 PRODUCT_BUNDLE_IDENTIFIER = com.parkersmith.fa-reader
 MARKETING_VERSION = 1.0
 CURRENT_PROJECT_VERSION = 1

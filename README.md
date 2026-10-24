@@ -8,7 +8,7 @@ It never writes to the PDF. Each book has its own highlights, history, search in
     make app      # builds "build/FA Reader.app", signs it ad hoc, registers it with LaunchServices
     make run      # builds and opens the app
     make install  # builds and copies the app to /Applications
-    ./scripts/make-icon.sh  # redraws Resources/AppIcon.icns from scripts/make-icon.swift
+    ./scripts/make-icon.sh  # redraws the icon from design/icon.svg via scripts/render-icon.py
     make test     # runs the tests
     make clean
 
@@ -20,7 +20,7 @@ Requires macOS 14 or later and the Swift 6 toolchain.
 
 1. Copy the zip to the other Mac (iCloud Drive, AirDrop, or a USB drive) and double-click it.
 2. Drag `FA Reader.app` into Applications.
-3. The first time you open it, macOS blocks it because it is not signed with an Apple Developer ID. Open System Settings > Privacy & Security, scroll down, and click Open Anyway next to the FA Reader message. Or run this once in Terminal:
+3. The first time you open it, macOS blocks it because it is not signed with an Apple Developer ID. Open System Settings > Privacy & Security, scroll down, and click Open Anyway next to the Rowlight message. Or run this once in Terminal:
 
        xattr -dr com.apple.quarantine "/Applications/FA Reader.app"
 
@@ -32,7 +32,7 @@ Highlights sync between Macs through iCloud Drive when both open the same PDF fr
 2. The last PDF you opened, reopened from a security-scoped bookmark
 3. The welcome screen, with an Open button
 
-File > Open (Cmd+O) opens another PDF. File > Open Recent lists the last 10 books. You can also drag a PDF onto the app icon, or choose Open With > FA Reader in Finder.
+File > Open (Cmd+O) opens another PDF. File > Open Recent lists the last 10 books. You can also drag a PDF onto the app icon, or choose Open With > Rowlight in Finder.
 
 ## Where data lives
 
@@ -194,7 +194,17 @@ Every push to `main` on GitHub (`elparko/fa-reader`, public) runs the tests, bui
 
 ## App Store
 
-Open `FAReader.xcodeproj` (not the Swift package). The app target links the `FACore` and `md4c` packages, sandboxed, with automatic signing. The display name lives in `Config/Brand.xcconfig` (`PRODUCT_NAME`). Marketing version is `MARKETING_VERSION` (1.0). Bump `CURRENT_PROJECT_VERSION` for each upload. `make app` stays the unsandboxed direct-download build.
+Open `FAReader.xcodeproj` (not the Swift package). The app target links the `FACore` and `md4c` packages, sandboxed, with automatic signing. The display name lives in `Config/Brand.xcconfig` (`PRODUCT_NAME`) and is **Rowlight**. In App Store Connect, set the listing name to **Rowlight: PDF Highlighter**. The name under the icon stays Rowlight. Marketing version is `MARKETING_VERSION` (1.0). Bump `CURRENT_PROJECT_VERSION` for each upload. `make app` stays the unsandboxed direct-download build. That build's file on disk is still `FA Reader.app`, so an already-installed copy can update itself. Finder shows Rowlight because the bundle display name comes from `PRODUCT_NAME`.
+
+The bundle ID stays `com.parkersmith.fa-reader`. It is already the direct-download app's identity (bookmarks, preferences, and the updater). Changing it before the first upload would make the App Store app a different app from the one people already run.
+
+Privacy policy: <https://www.elparko.com/apps/rowlight/privacy/>
+
+Support: <https://www.elparko.com/apps/rowlight/support/>
+
+Those two links are also in the About window, from `Resources/Credits.html`.
+
+The icon is `design/icon.svg` (a macOS squircle, transparent outside the plate). `./scripts/make-icon.sh` writes `Resources/AppIcon.icns` and the `AppIcon.appiconset` sizes from 16 px through 1024 px.
 
 ## Third-party code
 

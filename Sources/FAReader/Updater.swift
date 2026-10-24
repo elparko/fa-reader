@@ -96,8 +96,7 @@ enum Updater {
         unzip.arguments = ["-x", "-k", zip.path, dir.path]
         try unzip.run()
         unzip.waitUntilExit()
-        let fresh = dir.appendingPathComponent("FA Reader.app")
-        guard unzip.terminationStatus == 0, FileManager.default.fileExists(atPath: fresh.path) else { throw URLError(.cannotDecodeContentData) }
+        guard unzip.terminationStatus == 0, let fresh = updatedApp(in: dir) else { throw URLError(.cannotDecodeContentData) }
 
         AppModel.shared.flushNote()
         let target = Bundle.main.bundleURL.path
@@ -113,6 +112,16 @@ enum Updater {
         p.arguments = ["-c", script]
         try p.run()
         NSApp.terminate(nil)
+    }
+
+    /// Older release zips contain `FA Reader.app`. A later zip may use the display name.
+    private static func updatedApp(in dir: URL) -> URL? {
+        for name in ["FA Reader.app", "\(Branding.displayName).app"] {
+            let url = dir.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
+            .first { $0.pathExtension == "app" }
     }
 
     private static func alert(_ title: String, _ info: String) {

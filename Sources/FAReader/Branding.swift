@@ -8,6 +8,6 @@ enum Branding {
         let raw = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
         if let raw, !raw.isEmpty, !raw.contains("$(") { return raw }
-        return "FA Reader"
+        return "Rowlight"
     }
 }
