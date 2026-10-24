@@ -28,7 +28,7 @@ public enum BookmarkStore {
 
     public static func resolve(_ data: Data) throws -> (url: URL, isStale: Bool) {
         var stale = false
-        let url = try URL(resolvingBookmarkData: data, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &stale)
+        let url = try URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &stale)
         return (url, stale)
     }
 }
