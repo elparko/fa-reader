@@ -115,3 +115,19 @@ func indexRealBook() throws {
     try BookIndex.index(document: document, into: db)
     #expect(try db.scalar("SELECT COUNT(*) FROM book_fts") as? Int64 == Int64(document.pageCount))
 }
+
+@Test func indexStopsWhenProgressThrows() throws {
+    let db = try freshDatabase()
+    let document = PDFDocument()
+    for i in 0..<3 { document.insert(PDFPage(), at: i) }
+    var seen = 0
+    #expect(throws: CancellationError.self) {
+        try BookIndex.index(document: document, into: db) { done, _ in
+            seen = done
+            if done == 2 { throw CancellationError() }
+        }
+    }
+    #expect(seen == 2)
+    #expect(try !BookIndex.isIndexed(db: db, pageCount: 3))
+    #expect(try db.scalar("SELECT COUNT(*) FROM book_pages") as? Int64 == 0)
+}

@@ -242,12 +242,13 @@ final class AppModel: ObservableObject {
     private var pendingURL: URL?
     private var isLoading = false
     private var openToken = 0
+    private(set) var tidyTask: Task<Void, Never>?
     private let latestOpenToken = LockedCounter()
     private var searchSeq = 0
     private var searchInFlight = false
     private var queuedSearchActions: [@MainActor () -> Void] = []
     private var started = false
-#if DEBUG
+#if !APPSTORE
     private var openReported = false
     fileprivate var searchReported = false
 #endif
@@ -257,13 +258,15 @@ final class AppModel: ObservableObject {
     var selfCheck: SelfCheck?
 #endif
 
-#if DEBUG
+#if !APPSTORE
     var measureOpen: Bool { arguments.contains("--measure-open") }
     private var exitAfterMeasure: Bool { arguments.contains("--exit") }
 #endif
     var isTestRun: Bool {
 #if DEBUG
         measureOpen || selfCheck != nil
+#elseif !APPSTORE
+        measureOpen
 #else
         false
 #endif
@@ -294,7 +297,9 @@ final class AppModel: ObservableObject {
         if let i = arguments.firstIndex(of: "--self-check"), i + 1 < arguments.count {
             selfCheck = SelfCheck(report: URL(fileURLWithPath: arguments[i + 1]))
         }
-        if measureOpen || selfCheck != nil {
+#endif
+#if !APPSTORE
+        if isTestRun {
             pdfView.onFirstDraw = { [weak self] in self?.reportOpenTime() }
         }
 #endif
@@ -334,7 +339,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.sync() }
         }
         restoreExportFolder()
-#if DEBUG
+#if !APPSTORE
         if let i = arguments.firstIndex(of: "--pdf"), i + 1 < arguments.count {
             open(URL(fileURLWithPath: arguments[i + 1]))
             return
@@ -630,7 +635,7 @@ final class AppModel: ObservableObject {
 
     // MARK: Timing
 
-#if DEBUG
+#if !APPSTORE
     private func processStartMs() -> Double {
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
@@ -688,25 +693,40 @@ final class AppModel: ObservableObject {
     private func startIndexing(url: URL, pageCount: Int) {
         guard let dbPath = store?.folder.databaseURL.path else { return }
         indexProgress = nil
+        let token = openToken
+        let latest = latestOpenToken
         DispatchQueue.global(qos: .utility).async {
             do {
                 let db = try Database(path: dbPath)
                 if try !BookIndex.isIndexed(db: db, pageCount: pageCount) {
                     guard let doc = PDFDocument(url: url) else { return }
                     try BookIndex.index(document: doc, into: db) { done, total in
-                        DispatchQueue.main.async { MainActor.assumeIsolated { AppModel.shared.indexProgress = (done, total) } }
+                        guard latest.value == token else { throw CancellationError() }
+                        DispatchQueue.main.async {
+                            MainActor.assumeIsolated {
+                                let model = AppModel.shared
+                                if model.openToken == token { model.indexProgress = (done, total) }
+                            }
+                        }
                     }
                 }
+            } catch is CancellationError {
+                return
             } catch {
-                DispatchQueue.main.async { MainActor.assumeIsolated { AppModel.shared.indexProgress = nil } }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        if AppModel.shared.openToken == token { AppModel.shared.indexProgress = nil }
+                    }
+                }
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     let model = AppModel.shared
+                    guard model.openToken == token else { return }
                     model.indexProgress = nil
                     model.printedCache = [:]
                     model.updatePageLabel()
-#if DEBUG
+#if !APPSTORE
                     model.runSearchMeasurement()
 #endif
                 }
@@ -1168,47 +1188,42 @@ final class AppModel: ObservableObject {
 
     /// Builds a highlight from page characters, one box per text line.
     private func highlight(from piece: Piece, page: PDFPage, index: Int, text: PageText) -> Highlight? {
-        var rects: [Rect] = []
-        var strings: [String] = []
-        for r in text.runs(piece.chars) {
-            for line in pdfView.lineBoxes(for: r, on: page) {
-                rects.append(Rect(x: line.rect.minX, y: line.rect.minY, w: line.rect.width, h: line.rect.height))
-                strings.append(line.text)
-            }
-        }
-        guard !rects.isEmpty else { return nil }
-        let joined = strings.joined(separator: " ").split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-        return Highlight(id: piece.id ?? Highlight.newID(), page: index, rects: rects, text: joined, color: piece.color,
-                         note: piece.note, created: piece.created ?? Date().timeIntervalSince1970, source: piece.source ?? "app")
+        pdfView.geometry.highlight(from: piece, page: page, index: index, text: text)
     }
 
     /// Merges overlapping highlights and widens partial words on every page, as one change that Cmd+Z undoes.
     func tidyHighlights() {
-        guard let store, let document else { return }
-        let byPage = Dictionary(grouping: (try? store.highlights()) ?? [], by: \.page)
-        var ops: [PendingOp] = []
-        var before = 0, after = 0
-        var pages = 0
-        for index in byPage.keys.sorted() {
-            guard let page = document.page(at: index) else { continue }
-            let text = pdfView.pageText(page)
-            let plan = HighlightMerge.tidy(pageHighlights(index, page: page), text: text)
-            guard !plan.isEmpty else { continue }
-            let pieces = plan.pieces.compactMap { highlight(from: $0, page: page, index: index, text: text) }
-            ops += plan.removed.map(PendingOp.delete) + pieces.map(PendingOp.add)
-            before += plan.removed.count
-            after += pieces.count
-            pages += 1
+        guard tidyTask == nil, let store, let url = pdfURL else { return }
+        let token = openToken
+        let highlights = (try? store.highlights()) ?? []
+        tidyTask = Task { @MainActor [weak self] in
+            let found = await Task.detached(priority: .userInitiated) { TidyPlanner.plan(url: url, highlights: highlights) }.value
+            guard let self else { return }
+            tidyTask = nil
+            guard self.store === store, openToken == token else { return }
+            guard let plan = found else {
+                notify("Could not tidy", info: "Rowlight could not read this PDF.")
+                return
+            }
+            guard ((try? store.highlights()) ?? []) == highlights else {
+                notify("Highlights changed", info: "Highlights changed while Rowlight checked them. Choose Tidy again.")
+                return
+            }
+            applyTidy(plan, store: store)
         }
-        guard !ops.isEmpty else {
+    }
+
+    private func applyTidy(_ plan: TidyPlan, store: Store) {
+        guard !plan.ops.isEmpty else {
             notify("Nothing to tidy", info: "No highlights overlap and none stop partway through a word.")
             return
         }
+        let before = plan.before, after = plan.after, pages = plan.pages
         let message = "Tidy \(before) highlight\(before == 1 ? "" : "s") on \(pages) page\(pages == 1 ? "" : "s") into \(after)?"
         let info = "Overlapping highlights of one color are merged. Where colors overlap, the newer color wins. "
             + "Highlights that stop partway through a word are widened to the whole word. Cmd+Z undoes this."
         guard confirm(message, info: info, ok: "Tidy") else { return }
-        if commit({ _ in try store.commit(Plan(kind: .edit, label: "Edit", ops: ops), confirmed: true) }) {
+        if commit({ _ in try store.commit(Plan(kind: .edit, label: "Edit", ops: plan.ops), confirmed: true) }) {
             select(nil)
             showNotice("Tidied \(before) highlights into \(after)")
         }
@@ -1678,6 +1693,7 @@ final class AppModel: ObservableObject {
     // MARK: History
 
     func refreshHistory() {
+        guard showHistory else { return }
         history = (try? store?.sessions()) ?? []
     }
 
@@ -1694,7 +1710,8 @@ final class AppModel: ObservableObject {
     // MARK: Import
 
     func beginImport() {
-        guard store != nil, let url = pdfURL else { return }
+        guard let startStore = store, let url = pdfURL else { return }
+        let token = openToken
         importPreview = nil
         importFailure = nil
         showImport = true
@@ -1704,7 +1721,7 @@ final class AppModel: ObservableObject {
                 return
             }
             let scanned = await Task.detached(priority: .userInitiated) { PreviewImporter.scan(fresh) }.value
-            guard showImport, let store else { return }
+            guard showImport, let store, store === startStore, openToken == token else { return }
             let already: Set<String>
             do { already = try store.importedHighlightIDs() } catch {
                 print("import_scan_failed \(error)")
