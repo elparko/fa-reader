@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Where a book's change logs, notes, and search index live.
 ///
@@ -50,9 +51,11 @@ public enum BookDataLocator {
     }
 
     /// Writes `book.json` so a hash-named folder can be matched back to a file name. Leaves an identical file alone.
-    public static func writeIdentity(bookID: String, fileName: String, folder: SyncFolder) throws {
+    public static func writeIdentity(bookID: String, fileName: String, pageCount: Int? = nil, folder: SyncFolder) throws {
         try folder.prepare()
-        let data = try JSONSerialization.data(withJSONObject: ["file": fileName, "id": bookID], options: [.sortedKeys])
+        var record: [String: Any] = ["file": fileName, "id": bookID]
+        if let pageCount { record["pageCount"] = pageCount }
+        let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
         let url = folder.root.appendingPathComponent("book.json")
         if let existing = try? Data(contentsOf: url), existing == data { return }
         try CoordinatedFile.replace(at: url) { try data.write(to: $0, options: .atomic) }
@@ -196,14 +199,16 @@ public enum BookStoreError: Error, CustomStringConvertible {
 
 public enum BookOpener {
     /// Chooses the sync folder and, for a sandboxed open, copies a readable legacy sidecar into it.
-    public static func prepare(pdfURL: URL, sandboxed: Bool, ubiquityContainer: URL?, applicationSupport: URL?) throws -> OpenedBookData {
+    public static func prepare(pdfURL: URL, sandboxed: Bool, ubiquityContainer: URL?, applicationSupport: URL?, knownBookID: String? = nil) throws -> OpenedBookData {
         if !sandboxed {
             let folder = SyncFolder(pdfURL: pdfURL)
             return OpenedBookData(folder: folder, bookID: nil, migration: .none, place: .besidePDF(folder.root))
         }
-        let bookID = try BookIdentity.contentHash(of: pdfURL)
+        let contentHash = try BookIdentity.contentHash(of: pdfURL)
         if ubiquityContainer == nil, applicationSupport == nil { throw BookStoreError.missingApplicationSupport }
         let support = applicationSupport ?? URL(fileURLWithPath: "/unused")
+        let pageCount = CGPDFDocument(pdfURL as CFURL)?.numberOfPages
+        let bookID = resolveBookID(contentHash: contentHash, pageCount: pageCount, knownBookID: knownBookID, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport)
         let place = BookDataLocator.place(pdfURL: pdfURL, bookID: bookID, sandboxed: true, ubiquityContainer: ubiquityContainer, applicationSupport: support)
         let folder = SyncFolder(root: place.root)
         // A launch before the iCloud container existed stored the book in Application Support.
@@ -224,8 +229,63 @@ public enum BookOpener {
             destinationHadLogs: fromSupport.destinationHadLogs || fromSidecar.destinationHadLogs,
             idCollisions: fromSupport.idCollisions + fromSidecar.idCollisions
         )
-        try BookDataLocator.writeIdentity(bookID: bookID, fileName: pdfURL.lastPathComponent, folder: folder)
+        try BookDataLocator.writeIdentity(bookID: bookID, fileName: pdfURL.lastPathComponent, pageCount: pageCount, folder: folder)
         return OpenedBookData(folder: folder, bookID: bookID, migration: migration, place: place)
+    }
+
+    private static func holdsData(_ bookID: String, ubiquityContainer: URL?, applicationSupport: URL?) -> Bool {
+        var roots = [BookDataLocator.containerPlace(bookID: bookID, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport ?? URL(fileURLWithPath: "/unused")).root]
+        if let applicationSupport {
+            roots.append(BookDataLocator.containerPlace(bookID: bookID, ubiquityContainer: nil, applicationSupport: applicationSupport).root)
+        }
+        let manager = FileManager.default
+        return roots.contains { root in
+            if manager.fileExists(atPath: root.appendingPathComponent("book.json").path) { return true }
+            let logs = (try? manager.contentsOfDirectory(atPath: SyncFolder(root: root).changesURL.path)) ?? []
+            return logs.contains { $0.hasSuffix(".jsonl") && !$0.hasPrefix(".") }
+        }
+    }
+
+    private static func storedPageCount(_ bookID: String, ubiquityContainer: URL?, applicationSupport: URL?) -> Int? {
+        var roots = [BookDataLocator.containerPlace(bookID: bookID, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport ?? URL(fileURLWithPath: "/unused")).root]
+        if let applicationSupport {
+            roots.append(BookDataLocator.containerPlace(bookID: bookID, ubiquityContainer: nil, applicationSupport: applicationSupport).root)
+        }
+        for root in roots {
+            if let data = try? Data(contentsOf: root.appendingPathComponent("book.json")),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let count = object["pageCount"] as? Int { return count }
+        }
+        return nil
+    }
+
+    private static func resolveBookID(contentHash: String, pageCount: Int?, knownBookID: String?, ubiquityContainer: URL?, applicationSupport: URL?) -> String {
+        if holdsData(contentHash, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport) { return contentHash }
+        let base: URL
+        if let ubiquityContainer {
+            base = ubiquityContainer.appendingPathComponent("Documents", isDirectory: true)
+        } else if let applicationSupport {
+            base = applicationSupport
+        } else {
+            return contentHash
+        }
+        let aliasURL = base.appendingPathComponent("Aliases", isDirectory: true).appendingPathComponent("\(contentHash).json")
+        if let data = try? Data(contentsOf: aliasURL),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let target = object["id"] as? String, target != contentHash,
+           holdsData(target, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport) {
+            return target
+        }
+        guard let known = knownBookID, known != contentHash,
+              holdsData(known, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport),
+              let pageCount,
+              storedPageCount(known, ubiquityContainer: ubiquityContainer, applicationSupport: applicationSupport) == pageCount else { return contentHash }
+        let manager = FileManager.default
+        try? manager.createDirectory(at: aliasURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: ["id": known], options: [.sortedKeys]) {
+            try? CoordinatedFile.replace(at: aliasURL) { try data.write(to: $0, options: .atomic) }
+        }
+        return known
     }
 }
 

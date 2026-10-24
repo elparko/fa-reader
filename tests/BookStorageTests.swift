@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 import Testing
 @testable import FACore
 
@@ -320,4 +321,93 @@ private func logText(_ folder: SyncFolder, _ device: String) throws -> [String] 
     try Data("one".utf8).write(to: one)
     try Data("two".utf8).write(to: two)
     #expect(try BookIdentity.contentHash(of: one) != BookIdentity.contentHash(of: two))
+}
+
+private func makePDF(at url: URL, pages: Int) throws {
+    let document = PDFDocument()
+    for index in 0..<pages {
+        let image = NSImage(size: NSSize(width: 200, height: 200), flipped: false) { rect in
+            NSColor(calibratedWhite: CGFloat(index) / 10, alpha: 1).setFill()
+            rect.fill()
+            return true
+        }
+        document.insert(try #require(PDFPage(image: image)), at: index)
+    }
+    #expect(document.write(to: url))
+}
+
+private func annotate(_ url: URL) throws {
+    let document = try #require(PDFDocument(url: url))
+    let page = try #require(document.page(at: 0))
+    let note = PDFAnnotation(bounds: CGRect(x: 10, y: 10, width: 50, height: 20), forType: .highlight, withProperties: nil)
+    page.addAnnotation(note)
+    #expect(document.write(to: url))
+}
+
+private func putLog(_ bookID: String, support: URL) throws {
+    let folder = SyncFolder(root: BookDataLocator.containerPlace(bookID: bookID, ubiquityContainer: nil, applicationSupport: support).root)
+    try folder.prepare()
+    try Data("{}\n".utf8).write(to: folder.logURL(device: "mac"))
+}
+
+@Test func savedEditKeepsTheBookIDThroughKnownIDAndAlias() throws {
+    let root = try scratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let support = root.appendingPathComponent("Support")
+    let pdf = root.appendingPathComponent("a.pdf")
+    try makePDF(at: pdf, pages: 3)
+    let first = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    let a = try #require(first.bookID)
+    try putLog(a, support: support)
+    try annotate(pdf)
+    let edited = try BookIdentity.contentHash(of: pdf)
+    #expect(edited != a)
+    let second = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, knownBookID: a)
+    #expect(second.bookID == a)
+    #expect(FileManager.default.fileExists(atPath: support.appendingPathComponent("Aliases/\(edited).json").path))
+    let otherMac = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    #expect(otherMac.bookID == a)
+}
+
+@Test func differentPageCountDoesNotInheritTheKnownBook() throws {
+    let root = try scratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let support = root.appendingPathComponent("Support")
+    let pdf = root.appendingPathComponent("a.pdf")
+    try makePDF(at: pdf, pages: 3)
+    let a = try #require(try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support).bookID)
+    try putLog(a, support: support)
+    try makePDF(at: pdf, pages: 5)
+    let hash = try BookIdentity.contentHash(of: pdf)
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, knownBookID: a)
+    #expect(opened.bookID == hash)
+}
+
+@Test func hashFolderWithDataWinsOverKnownID() throws {
+    let root = try scratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let support = root.appendingPathComponent("Support")
+    let pdf = root.appendingPathComponent("a.pdf")
+    try makePDF(at: pdf, pages: 3)
+    let a = try #require(try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support).bookID)
+    try putLog(a, support: support)
+    try annotate(pdf)
+    let hash = try BookIdentity.contentHash(of: pdf)
+    try putLog(hash, support: support)
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support, knownBookID: a)
+    #expect(opened.bookID == hash)
+}
+
+@Test func aliasToAnEmptyFolderIsIgnored() throws {
+    let root = try scratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let support = root.appendingPathComponent("Support")
+    let pdf = root.appendingPathComponent("a.pdf")
+    try makePDF(at: pdf, pages: 3)
+    let hash = try BookIdentity.contentHash(of: pdf)
+    let aliases = support.appendingPathComponent("Aliases", isDirectory: true)
+    try FileManager.default.createDirectory(at: aliases, withIntermediateDirectories: true)
+    try JSONSerialization.data(withJSONObject: ["id": "missing"]).write(to: aliases.appendingPathComponent("\(hash).json"))
+    let opened = try BookOpener.prepare(pdfURL: pdf, sandboxed: true, ubiquityContainer: nil, applicationSupport: support)
+    #expect(opened.bookID == hash)
 }
