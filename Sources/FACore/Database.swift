@@ -5,6 +5,8 @@ private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.sel
 
 public struct DatabaseError: Error, CustomStringConvertible {
     public let message: String
+    public var code: Int32 = 0
+    public var isNewerSchema = false
     public var description: String { message }
 }
 
@@ -37,7 +39,42 @@ public final class Database {
 
     deinit { sqlite3_close_v2(handle) }
 
-    private var lastError: DatabaseError { DatabaseError(message: String(cString: sqlite3_errmsg(handle))) }
+    private var lastError: DatabaseError {
+        DatabaseError(message: String(cString: sqlite3_errmsg(handle)), code: sqlite3_extended_errcode(handle) & 0xFF)
+    }
+
+    public var userVersion: Int { Int((try? scalar("PRAGMA user_version") as? Int64) ?? 0) }
+
+    public func migrate(_ steps: [(Database) throws -> Void]) throws {
+        let current = userVersion
+        if current > steps.count {
+            throw DatabaseError(message: "This book's saved data was made by a newer version of Rowlight (schema \(current)). Update the app to open it.", isNewerSchema: true)
+        }
+        guard current < steps.count else { return }
+        try transaction {
+            for step in steps[current...] { try step(self) }
+            try exec("PRAGMA user_version=\(steps.count)")
+        }
+    }
+
+    public static func openRecovering(path: String, setup: (Database) throws -> Void) throws -> Database {
+        do {
+            let db = try Database(path: path)
+            try setup(db)
+            if let result = try db.scalar("PRAGMA quick_check") as? String, result != "ok" {
+                throw DatabaseError(message: "Database integrity check failed: \(result)", code: SQLITE_CORRUPT)
+            }
+            return db
+        } catch let error as DatabaseError where error.code == SQLITE_CORRUPT || error.code == SQLITE_NOTADB {
+            let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+            for suffix in ["", "-wal", "-shm"] where FileManager.default.fileExists(atPath: path + suffix) {
+                try FileManager.default.moveItem(atPath: path + suffix, toPath: "\(path).corrupt-\(stamp)\(suffix)")
+            }
+            let db = try Database(path: path)
+            try setup(db)
+            return db
+        }
+    }
 
     public func exec(_ sql: String) throws {
         guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else { throw lastError }

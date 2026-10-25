@@ -4,6 +4,7 @@ public final class Store {
     public static let guardPages = 20
 
     public let db: Database
+    private let logDB: Database
     public let folder: SyncFolder
     public let device: String
     public let deviceName: String
@@ -19,6 +20,7 @@ public final class Store {
     private var editSession: Session?
     private var lastEditTs: Double = 0
     private var maxApplied = OrderKey(ts: 0, device: "", seq: 0)
+    private var lastSeq = 0
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.outputFormatting = .sortedKeys
@@ -35,8 +37,8 @@ public final class Store {
         self.folder = folder
         self.device = device
         self.deviceName = deviceName
-        db = try Database(path: folder.databaseURL.path)
-        try Store.migrate(db)
+        db = try Database.openRecovering(path: folder.databaseURL.path, setup: Store.migrate)
+        logDB = try Database(path: folder.databaseURL.path)
         if let raw = try db.scalar("SELECT value FROM meta WHERE key='max_applied'") as? String,
            let key = try? decoder.decode(OrderKey.self, from: Data(raw.utf8)) {
             maxApplied = key
@@ -58,6 +60,10 @@ public final class Store {
     }
 
     static func migrate(_ db: Database) throws {
+        try db.migrate([createSchema])
+    }
+
+    private static func createSchema(_ db: Database) throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
         CREATE TABLE IF NOT EXISTS sessions(
@@ -156,7 +162,8 @@ public final class Store {
             lines.append(try encoder.encode(LogLine.session(session)))
         }
 
-        var seq = (try db.scalar("SELECT MAX(seq) FROM ops WHERE device=?", device) as? Int64).map(Int.init) ?? 0
+        let storedSeq = (try db.scalar("SELECT MAX(seq) FROM ops WHERE device=?", device) as? Int64).map(Int.init) ?? 0
+        var seq = max(storedSeq, lastSeq, Int(Date().timeIntervalSince1970 * 1000))
         var ops: [Op] = []
         for (i, p) in plan.ops.enumerated() {
             seq += 1
@@ -166,6 +173,7 @@ public final class Store {
                           oldNote: p.oldNote, newNote: p.newNote))
         }
         lines += try ops.map { try encoder.encode(LogLine.op($0)) }
+        lastSeq = seq
 
         if logQueue == nil { try folder.append(lines, device: device) }
         try db.transaction {
@@ -192,10 +200,10 @@ public final class Store {
     /// Appends the log lines saved by commits to this device's log file, then forgets them.
     /// After a crash between the two steps the lines are appended again; reading a line twice changes nothing.
     public func flushLog() throws {
-        let rows = try db.query("SELECT id, line FROM pending_log ORDER BY id")
+        let rows = try logDB.query("SELECT id, line FROM pending_log ORDER BY id")
         guard let last = rows.last else { return }
         try folder.append(rows.map { Data($0.string("line").utf8) }, device: device)
-        try db.run("DELETE FROM pending_log WHERE id<=?", last.int("id"))
+        try logDB.run("DELETE FROM pending_log WHERE id<=?", last.int("id"))
     }
 
     /// The ops that put highlights back the way they were before `ops`, skipping any whose highlight has changed since.
@@ -345,10 +353,33 @@ public final class Store {
     public func readLogs() throws -> [LogRead] {
         try folder.logFiles().compactMap { file in
             let name = file.lastPathComponent
-            let offset = (try db.scalar("SELECT offset FROM sync_offsets WHERE file=?", name) as? Int64).map(Int.init) ?? 0
-            guard let (lines, end) = folder.readLines(file, from: offset), end != offset || !lines.isEmpty else { return nil }
+            let offset = (try logDB.scalar("SELECT offset FROM sync_offsets WHERE file=?", name) as? Int64).map(Int.init) ?? 0
+            guard let read = folder.readLines(file, from: offset) else { return nil }
+            var lines = read.lines
+            var end = read.end
+            for (i, line) in read.lines.enumerated() where (try? decoder.decode(LogLine.self, from: line)) == nil {
+                guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { continue }
+                if Self.isKnownShape(object) {
+                    FileHandle.standardError.write(Data("sync log: skipped damaged line in \(name) at offset \(read.starts[i])\n".utf8))
+                    continue
+                }
+                lines = Array(read.lines[..<i])
+                end = read.starts[i]
+                break
+            }
+            guard end != offset || !lines.isEmpty else { return nil }
             return LogRead(file: name, lines: lines, end: end)
         }
+    }
+
+    private static func isKnownShape(_ object: [String: Any]) -> Bool {
+        if let op = object["op"] as? [String: Any] {
+            return (op["kind"] as? String).flatMap(OpKind.init(rawValue:)) != nil
+        }
+        if let session = object["session"] as? [String: Any] {
+            return (session["kind"] as? String).flatMap(SessionKind.init(rawValue:)) != nil
+        }
+        return false
     }
 
     @discardableResult

@@ -34,6 +34,10 @@ final class MarkyView: NSView, NSTextViewDelegate {
         didSet { if baseURL != oldValue { invalidatePreview() } }
     }
 
+    var isReadOnly = false {
+        didSet { editor?.isEditable = !isReadOnly }
+    }
+
     var fontSize: CGFloat = Theme.defaultFontSize {
         didSet { if fontSize != oldValue { fontSizeDidChange() } }
     }
@@ -173,7 +177,7 @@ final class MarkyView: NSView, NSTextViewDelegate {
                                            frame: NSRect(origin: .zero, size: bounds.size))
         let tv = scroll.documentView as! EditorTextView
         let hl = MarkdownHighlighter(fontSize: fontSize)
-        tv.isEditable = true
+        tv.isEditable = !isReadOnly
         tv.isRichText = false
         tv.importsGraphics = false
         tv.allowsUndo = true
@@ -272,20 +276,26 @@ final class MarkyView: NSView, NSTextViewDelegate {
     }
 
     private func render() {
+#if !APPSTORE
         let start = CACurrentMediaTime()
+#endif
         let width = preview.contentWidth
         let result = MarkdownRenderer.render(text, baseURL: baseURL, fontSize: fontSize, maxImageWidth: width)
+#if !APPSTORE
         let built = CACurrentMediaTime()
+#endif
         let y = previewScroll.contentView.bounds.origin.y
         preview.textStorage?.setAttributedString(result.text)
         anchors = result.anchors
         renderedVersion = version
         renderedWidth = width
         if y > 0 { restorePreviewScroll(y) }
+#if !APPSTORE
         if Debug.trace {
             NSLog("render: parse+build %.1fms, layout %.1fms (%d chars)",
                   (built - start) * 1000, (CACurrentMediaTime() - built) * 1000, result.text.length)
         }
+#endif
         if !result.pendingImages.isEmpty {
             ImageStore.shared.fetch(result.pendingImages) { [weak self] in self?.render() }
         }

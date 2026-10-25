@@ -33,10 +33,10 @@ private func read(_ dir: URL, _ name: String) throws -> String {
 }
 
 @Test func linkFormat() {
-    #expect(MarkdownExporter.link(page: 366) == "fa-reader://open?page=367")
-    #expect(MarkdownExporter.link(page: 0, highlight: "abc") == "fa-reader://open?page=1&highlight=abc")
+    #expect(MarkdownExporter.link(page: 366) == "rowlight://open?page=367")
+    #expect(MarkdownExporter.link(page: 0, highlight: "abc") == "rowlight://open?page=1&highlight=abc")
     #expect(MarkdownExporter.link(page: 4, highlight: "abc", pdf: URL(fileURLWithPath: "/Books/Path oma & co.pdf"))
-            == "fa-reader://open?page=5&highlight=abc&pdf=/Books/Path%20oma%20%26%20co.pdf")
+            == "rowlight://open?page=5&highlight=abc&pdf=/Books/Path%20oma%20%26%20co.pdf")
 }
 
 @Test func fileNameSanitizing() {
@@ -56,7 +56,7 @@ private func read(_ dir: URL, _ name: String) throws -> String {
     let bio = try read(dir, "00 Biochemistry.md")
     #expect(bio == """
         ---
-        fa-reader-export: 1
+        rowlight-export: 1
         section: "Biochemistry"
         parent: "Section III: High-Yield Organ Systems"
         pdf-pages: 1-10
@@ -67,7 +67,7 @@ private func read(_ dir: URL, _ name: String) throws -> String {
         <!-- fa-reader:highlights:start -->
 
         ## PDF p. 3
-        - ==Papillary carcinoma: most prevalent== (pink) [open](fa-reader://open?page=3&highlight=a1) <!-- fa:a1 -->
+        - ==Papillary carcinoma: most prevalent== (pink) [open](rowlight://open?page=3&highlight=a1) <!-- fa:a1 -->
           > line 1
           > line 2
 
@@ -82,10 +82,44 @@ private func read(_ dir: URL, _ name: String) throws -> String {
     #expect(endo.contains("section: \"Endocrine / Diabetes: notes\"\n"))
     #expect(endo.contains("pdf-pages: 11-20\nhighlights: 3\n"))
     #expect(endo.contains("## p. 346 (PDF 13)\n"))
-    #expect(endo.contains("## PDF p. 16\n- Note: remember this [open](fa-reader://open?page=16&highlight=b3) <!-- fa:b3 -->\n"))
+    #expect(endo.contains("## PDF p. 16\n- Note: remember this [open](rowlight://open?page=16&highlight=b3) <!-- fa:b3 -->\n"))
 
     let heme = try read(dir, "02 Hematology.md")
     #expect(!heme.contains("parent:"))
+}
+
+@Test func oldKeyFileMergesKeepsNotesAndGetsNewKey() throws {
+    let store = try makeStore()
+    let dir = outputDir()
+    let name = MarkdownExporter.fileName(for: testSections[0])
+    let old = """
+        ---
+        fa-reader-export: 1
+        section: "Old title"
+        tags: mine
+        highlights: 0
+        ---
+        # Old title
+
+        <!-- fa-reader:highlights:start -->
+        <!-- fa-reader:highlights:end -->
+
+        ## Notes
+
+        my own words
+
+        """
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try old.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+    let result = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    #expect(result.written.contains(name))
+    let text = try read(dir, name)
+    #expect(text.hasPrefix("---\nrowlight-export: 1\n"))
+    #expect(!text.contains("fa-reader-export"))
+    #expect(text.contains("tags: mine\n"))
+    #expect(text.contains("section: \"Biochemistry\"\n"))
+    #expect(text.contains("my own words\n"))
+    #expect(text.contains("fa:a1"))
 }
 
 @Test func reExportIsStable() throws {
@@ -227,4 +261,88 @@ private func read(_ dir: URL, _ name: String) throws -> String {
     let fresh = MarkdownExporter.render(section: section, highlights: [], printedPage: { _ in nil })
     #expect(!MarkdownExporter.hasUserContent(fresh))
     #expect(MarkdownExporter.hasUserContent(fresh + "RTA type 1 = distal\n"))
+}
+
+private let renalSection = Section(id: 1, title: "Renal", start: 0, end: 9)
+
+@Test func mergeSkipsWhenStartMarkerIsMissing() {
+    let fresh = MarkdownExporter.render(section: renalSection, highlights: [], printedPage: { _ in nil })
+    let damaged = fresh.replacingOccurrences(of: MarkdownExporter.blockStart, with: "") + "My own notes\n"
+    #expect(MarkdownExporter.merge(existing: damaged, section: renalSection, highlights: [], printedPage: { _ in nil }) == nil)
+}
+
+@Test func mergeSkipsWhenEndMarkerIsMissing() {
+    let fresh = MarkdownExporter.render(section: renalSection, highlights: [], printedPage: { _ in nil })
+    let damaged = fresh.replacingOccurrences(of: MarkdownExporter.blockEnd, with: "") + "My own notes\n"
+    #expect(MarkdownExporter.merge(existing: damaged, section: renalSection, highlights: [], printedPage: { _ in nil }) == nil)
+}
+
+@Test func exportLeavesUnsplittableAndUnreadableFilesUnchanged() throws {
+    let store = try makeStore()
+    let dir = outputDir()
+    _ = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    let bio = dir.appendingPathComponent("00 Biochemistry.md")
+    let original = try String(contentsOf: bio, encoding: .utf8)
+
+    let noEnd = original.replacingOccurrences(of: MarkdownExporter.blockEnd, with: "") + "Keep me.\n"
+    try noEnd.write(to: bio, atomically: true, encoding: .utf8)
+    _ = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    #expect(try String(contentsOf: bio, encoding: .utf8) == noEnd)
+
+    var bytes = Data(original.utf8)
+    bytes.append(contentsOf: [0xFF, 0xFE, 0xC0])
+    try bytes.write(to: bio)
+    _ = try MarkdownExporter.export(store: store, sections: testSections, to: dir)
+    #expect(try Data(contentsOf: bio) == bytes)
+}
+
+@Test func normalMergeKeepsNotesAndUpdatesHighlights() {
+    let fresh = MarkdownExporter.render(section: renalSection, highlights: [], printedPage: { _ in nil })
+    let existing = fresh + "My notes\n"
+    let merged = MarkdownExporter.merge(existing: existing, section: renalSection, highlights: [hl("a", page: 1, text: "Nephron")], printedPage: { _ in nil })
+    #expect(merged?.contains("My notes\n") == true)
+    #expect(merged?.contains("Nephron") == true)
+    #expect(merged?.contains("highlights: 1\n") == true)
+}
+
+@Test func exportNeitherRewritesNorRemovesAFileWhoseDownloadHasNotFinished() throws {
+    let dir = outputDir()
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let name = MarkdownExporter.fileName(for: testSections[2])
+    let file = dir.appendingPathComponent(name)
+    let bytes = Data(MarkdownExporter.render(section: testSections[2], highlights: [], printedPage: { _ in nil }).utf8)
+    try bytes.write(to: file)
+    try Data().write(to: dir.appendingPathComponent(".\(name).icloud"))
+    let result = try MarkdownExporter.export(highlights: [], sections: testSections, to: dir)
+    #expect(try Data(contentsOf: file) == bytes)
+    #expect(result.written.isEmpty)
+    #expect(result.removed.isEmpty)
+}
+
+@Test func fileWithOnlyAnExtraFrontMatterKeyIsNeitherRewrittenNorDeleted() throws {
+    let dir = outputDir()
+    let section = Section(id: 2, title: "Hematology", start: 20, end: 29)
+    let first = MarkdownExporter.render(section: section, highlights: [], printedPage: { _ in nil })
+    let text = first.replacingOccurrences(of: "highlights: 0\n", with: "highlights: 0\ntags: [a]\n")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("02 Hematology.md")
+    try text.write(to: url, atomically: true, encoding: .utf8)
+    let result = try MarkdownExporter.export(highlights: [], sections: [section], to: dir)
+    #expect(result.removed.isEmpty && result.written.isEmpty && result.unchanged == ["02 Hematology.md"])
+    #expect(try String(contentsOf: url, encoding: .utf8) == text)
+    let again = try MarkdownExporter.export(highlights: [], sections: [section], to: dir)
+    #expect(again.written.isEmpty)
+    #expect(try String(contentsOf: url, encoding: .utf8) == text)
+}
+
+@Test func userParentKeyInTopLevelSectionSurvivesAndQuotedBookKeyIsNotDuplicated() {
+    let section = Section(id: 2, title: "Hematology", start: 20, end: 29)
+    let existing = "---\nrowlight-export: 1\nparent: mine\n\"book\": x\nbook : y\nsection: \"Hematology\"\n---\n" + MarkdownExporter.blockStart + "\n" + MarkdownExporter.blockEnd + "\n"
+    let pdf = URL(fileURLWithPath: "/tmp/First Aid.pdf")
+    let merged = MarkdownExporter.merge(existing: existing, section: section, highlights: [], printedPage: { _ in nil }, pdf: pdf)!
+    #expect(merged.contains("parent: mine\n"))
+    #expect(!merged.contains("\"book\": x") && !merged.contains("book : y"))
+    #expect(merged.components(separatedBy: "book:").count == 2)
+    let noPdf = MarkdownExporter.merge(existing: existing, section: section, highlights: [], printedPage: { _ in nil })!
+    #expect(noPdf.contains("\"book\": x\n") && noPdf.contains("book : y\n"))
 }

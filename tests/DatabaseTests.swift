@@ -135,3 +135,43 @@ private struct Boom: Error {}
     let db = try Database(path: path)
     #expect(try db.scalar("SELECT a FROM t") as? Int64 == 5)
 }
+
+@Test func storeSchemaSetsUserVersionOne() throws {
+    let db = try tempDatabase()
+    try Store.migrate(db)
+    #expect(db.userVersion == 1)
+    try Store.migrate(db)
+    #expect(db.userVersion == 1)
+}
+
+@Test func oldDatabaseWithVersionZeroMigratesToOne() throws {
+    let db = try tempDatabase()
+    try db.exec("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES('k', 'v')")
+    #expect(db.userVersion == 0)
+    try Store.migrate(db)
+    #expect(db.userVersion == 1)
+    #expect(try db.scalar("SELECT value FROM meta WHERE key='k'") as? String == "v")
+    #expect(try db.scalar("SELECT COUNT(*) FROM ops") as? Int64 == 0)
+}
+
+@Test func migrationsRunInOrderFromTheStoredVersion() throws {
+    let db = try tempDatabase()
+    var ran: [Int] = []
+    let steps: [(Database) throws -> Void] = [{ _ in ran.append(1) }, { _ in ran.append(2) }, { _ in ran.append(3) }]
+    try db.exec("PRAGMA user_version=1")
+    try db.migrate(steps)
+    #expect(ran == [2, 3])
+    #expect(db.userVersion == 3)
+}
+
+@Test func newerDatabaseVersionThrowsFriendlyError() throws {
+    let db = try tempDatabase()
+    try db.exec("PRAGMA user_version=99")
+    #expect(throws: DatabaseError.self) { try Store.migrate(db) }
+    do { try Store.migrate(db) } catch let error as DatabaseError {
+        #expect(error.isNewerSchema)
+        #expect(error.description.contains("newer version of Rowlight"))
+    }
+    #expect(throws: Never.self) { try db.exec("SELECT 1") }
+    do { _ = try db.query("SELECT * FROM missing") } catch let error as DatabaseError { #expect(!error.isNewerSchema) }
+}

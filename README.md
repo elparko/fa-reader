@@ -1,14 +1,14 @@
 # fa-reader
 
-A macOS app for reading, highlighting, and annotating PDF textbooks. Built for First Aid for USMLE Step 1; works with any PDF.
-It never writes to the PDF. Highlights and notes are stored in a folder next to each PDF, so every book has its own highlights, history, search index and export.
+A macOS app for reading, highlighting, and annotating PDF textbooks. It works with any PDF.
+It never writes to the PDF. Each book has its own highlights, history, search index, and export.
 
 ## Build
 
     make app      # builds "build/FA Reader.app", signs it ad hoc, registers it with LaunchServices
     make run      # builds and opens the app
     make install  # builds and copies the app to /Applications
-    ./scripts/make-icon.sh  # redraws Resources/AppIcon.icns from scripts/make-icon.swift
+    ./scripts/make-icon.sh  # redraws the icon from design/icon.svg via scripts/render-icon.py
     make test     # runs the tests
     make clean
 
@@ -20,26 +20,29 @@ Requires macOS 14 or later and the Swift 6 toolchain.
 
 1. Copy the zip to the other Mac (iCloud Drive, AirDrop, or a USB drive) and double-click it.
 2. Drag `FA Reader.app` into Applications.
-3. The first time you open it, macOS blocks it because it is not signed with an Apple Developer ID. Open System Settings > Privacy & Security, scroll down, and click Open Anyway next to the FA Reader message. Or run this once in Terminal:
+3. The first time you open it, macOS blocks it because it is not signed with an Apple Developer ID. Open System Settings > Privacy & Security, scroll down, and click Open Anyway next to the Rowlight message. Or run this once in Terminal:
 
        xattr -dr com.apple.quarantine "/Applications/FA Reader.app"
 
-Highlights sync between Macs through iCloud Drive when both open the same PDF from iCloud Drive. Each Mac writes its own change log in `<book>.fa-reader/changes/` and reads the others' every 5 seconds.
+Highlights sync between Macs through iCloud Drive when both open the same PDF from iCloud Drive. Each Mac writes its own change log in `<book>.fa-reader/changes/` and reads the others' every 5 seconds. The App Store build syncs through the app's own iCloud Documents container instead of that folder.
 
 ## Which PDF opens
 
 1. `--pdf <path>` on the command line
-2. The last PDF you opened
-3. `~/Library/Mobile Documents/com~apple~CloudDocs/School/MS1/Textbooks/first aid.pdf`, if it exists
-4. An Open dialog
+2. The last PDF you opened, reopened from a security-scoped bookmark
+3. The welcome screen, with an Open button
 
-File > Open (Cmd+O) opens another PDF. File > Open Recent lists the last 10 books. You can also drag a PDF onto the app icon, or choose Open With > FA Reader in Finder.
+File > Open (Cmd+O) opens another PDF. File > Open Recent lists the last 10 books. You can also drag a PDF onto the app icon, or choose Open With > Rowlight in Finder.
 
 ## Where data lives
 
-For `first aid.pdf`, the folder is `first aid.fa-reader/` next to the PDF:
+Direct download (`make app`, not sandboxed) still stores data beside the PDF, so iCloud Drive can sync that folder. For `Guide.pdf` the folder is `Guide.fa-reader/` next to the PDF.
 
-- `changes/<device>.jsonl`: one append-only change log per device. iCloud Drive syncs this folder.
+The Mac App Store build is sandboxed. It only has access to the PDF you pick, so it cannot create that folder. It stores the same layout in the app's iCloud Documents container at `Books/<content-hash>/`, or in Application Support when iCloud is unavailable. The hash is the SHA-256 of the PDF, so the same file on two Macs shares one folder. The first time you open a book whose old folder next to the PDF is readable, those change logs and notes are copied across. The old folder is left in place. If the sandbox cannot see it, File > Import Highlights from Folder… asks for it once, and again from the menu whenever you want.
+
+Both layouts use the same contents:
+
+- `changes/<device>.jsonl`: one append-only change log per device. iCloud syncs this folder.
 - `local.nosync/fa.sqlite`: search index and current state. Not synced by iCloud. It can be deleted and is rebuilt from the change logs.
 - `markdown/`: exported notes, one file per section.
 
@@ -78,7 +81,7 @@ After you highlight, the new highlight is selected and the bar shows its tools, 
 
 Highlights are drawn from the boxes of their own characters. PDFKit reports the last character of each line with the box of the whole line, so highlights that ended at a line end used to cover the whole line. Highlights made before this change keep their old boxes until you run Tidy.
 
-A drag stays on the line where it started until the mouse moves most of a line height up or down. About 4% of the text lines in First Aid report a box twice their real height that hangs over the row below. The app cuts those boxes back to their own row, both for the drag and for the saved highlight. Neighboring rows also overlap by about a point; highlight boxes are cut halfway through that overlap, so adjacent highlighted rows do not show a darker stripe.
+A drag stays on the line where it started until the mouse moves most of a line height up or down. About 4% of the text lines in some textbook PDFs report a box twice their real height that hangs over the row below. The app cuts those boxes back to their own row, both for the drag and for the saved highlight. Neighboring rows also overlap by about a point; highlight boxes are cut halfway through that overlap, so adjacent highlighted rows do not show a darker stripe.
 
 The toolbar, next to the zoom buttons, also has a highlighter button and four color dots.
 
@@ -144,7 +147,7 @@ A search of two or more words lists results with the exact phrase first, then re
 
 ## URL scheme
 
-`fa-reader://open?page=<n>&highlight=<id>&pdf=<path>` opens the book at `path` (percent-encoded), goes to PDF page `n` (counting from 1) and selects the highlight. Without `pdf`, it uses the book that is open. Markdown exports use these links.
+`fa-reader://open?page=<n>&highlight=<id>&book=<id>&pdf=<path>` opens the book, goes to PDF page `n` (counting from 1) and selects the highlight. `book` is the content hash and is resolved through the PDF's saved bookmark, which is what works in the sandbox when the path itself is not readable. `pdf` is the percent-encoded path and still works for older links, and for the direct-download build. Without either, the link uses the book that is open. Markdown exports use these links. The App Store build includes `book`; the direct-download build keeps writing `pdf` only.
 
 ## History and undo
 
@@ -156,16 +159,14 @@ File > Import from Preview scans the highlights and notes already saved in the P
 
 Annotations made in rapid runs are grouped as a burst: at least 15 annotations with no more than 3 seconds between one and the next, or annotations on 5 or more different pages within 10 seconds. These usually come from accidental select-all or drag actions. Bursts are excluded by default; tick a burst to include it.
 
-The current First Aid PDF has 49 Preview highlights and 7 text notes, all made one at a time, so the scan finds no bursts in it.
-
 ## Markdown export format
 
-One file per section (for example `24 Endocrine.md`), in the book's `markdown/` folder. The files update automatically about a second after any highlight change; File > Export Markdown does the same on demand. If you choose an export folder, each book gets its own subfolder there. Re-running the export rewrites only files whose content changed. It deletes a file it created only when that section has no highlights left and you have written nothing in the file. Files without the `fa-reader-export: 1` line are never touched.
+One file per section (for example `24 Endocrine.md`), in the book's `markdown/` folder. The files update automatically about a second after any highlight change; File > Export Markdown does the same on demand. If you choose an export folder, each book gets its own subfolder there. Re-running the export rewrites only files whose content changed. It deletes a file it created only when that section has no highlights left and you have written nothing in the file. Files without the `rowlight-export: 1` line are never touched. The app also accepts the older `fa-reader-export: 1` line and replaces it with the new one when it rewrites the file.
 
 ```
 ---
-fa-reader-export: 1
-book: "first aid"
+rowlight-export: 1
+book: "Guide"
 section: "Endocrine"
 parent: "Section III: High-Yield Organ Systems"
 pdf-pages: 349-383
@@ -183,17 +184,31 @@ Each highlight line ends with `<!-- fa:<id> -->`, a stable ID another tool can k
 ## Checking the app
 
     "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --measure-open --exit
-    "build/FA Reader.app/Contents/MacOS/FAReader" --pdf <copy of the PDF> --self-check report.json
+    swift build && .build/debug/FAReader --pdf <copy of the PDF> --self-check report.json
 
-`--self-check` runs without taking focus or playing sounds. Add `--visible` to keep the window on screen and save screenshots of the highlight bar, the liver page and the highlights list next to the report. It highlights text with Cmd+1, recolors with Cmd+3, highlights from the color popup with a mouse click and with the 2 key, checks that a drag drifting below its line selects one line, checks word snapping, merging, splitting, removing part of a highlight, Tidy and undo of each, filters and groups the highlights list, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, checks that Esc clears page matches and that a two-word search marks the whole phrase, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
+`--self-check` is compiled into debug builds only (`swift build`, not `make app` and not the App Store archive). It runs without taking focus or playing sounds. Add `--visible` to keep the window on screen and save screenshots of the highlight bar, the liver page and the highlights list next to the report. It highlights text with Cmd+1, recolors with Cmd+3, highlights from the color popup with a mouse click and with the 2 key, checks that a drag drifting below its line selects one line, checks word snapping, merging, splitting, removing part of a highlight, Tidy and undo of each, filters and groups the highlights list, adds a note, searches with each filter, imports from Preview, undoes a session, exports markdown twice, checks that Esc clears page matches and that a two-word search marks the whole phrase, opens a `fa-reader://` link and zooms. It writes pass/fail results to `report.json` and a window snapshot to `report.png`. Run it on a copy of the PDF, because it writes highlights into the folder next to that PDF.
 
 ## Updates
 
-Every push to `main` on GitHub (`elparko/fa-reader`, public) runs the tests, builds `FA Reader.zip`, and publishes it as a release named `build-<n>`, where `n` is the commit count. The app checks for a newer build once a day and from FA Reader > Check for Updates. It downloads the zip, replaces itself and restarts.
+Every push to `main` on GitHub (`elparko/fa-reader`, public) runs the tests, builds `FA Reader.zip`, and publishes it as a release named `build-<n>`, where `n` is the commit count. The direct-download app checks for a newer build once a day and from the application menu's Check for Updates. It downloads the zip, replaces itself and restarts. The App Store build does not include the updater (`APPSTORE` is set by the Xcode target). No GitHub account is needed to update the direct-download build. If the GitHub command-line tool (`gh`) is installed and logged in, the app uses its token, which avoids GitHub's limit of 60 anonymous requests per hour.
 
-No GitHub account is needed to update. If the GitHub command-line tool (`gh`) is installed and logged in, the app uses its token, which avoids GitHub's limit of 60 anonymous requests per hour.
+## App Store
+
+Open `FAReader.xcodeproj` (not the Swift package). The app target links the `FACore` and `md4c` packages, sandboxed, with automatic signing. The display name lives in `Config/Brand.xcconfig` (`PRODUCT_NAME`) and is **Rowlight**. In App Store Connect, set the listing name to **Rowlight: PDF Highlighter**. The name under the icon stays Rowlight. Marketing version is `MARKETING_VERSION` (1.0.0). Bump `CURRENT_PROJECT_VERSION` for each upload. `make app` stays the unsandboxed direct-download build. That build's file on disk is still `FA Reader.app`, so an already-installed copy can update itself. Finder shows Rowlight because the bundle display name comes from `PRODUCT_NAME`.
+
+The bundle ID stays `com.parkersmith.fa-reader`. It is already the direct-download app's identity (bookmarks, preferences, and the updater). Changing it before the first upload would make the App Store app a different app from the one people already run.
+
+Privacy policy: <https://www.elparko.com/apps/rowlight/privacy/>
+
+Support: <https://www.elparko.com/apps/rowlight/support/>
+
+Contact: <rowlight@proton.me>
+
+The About window (`Resources/Credits.html`) shows that address and the two links. Use the same address for the App Store Connect review contact.
+
+The icon is `design/icon.svg` (a macOS squircle, transparent outside the plate). `./scripts/make-icon.sh` writes `Resources/AppIcon.icns` and the `AppIcon.appiconset` sizes from 16 px through 1024 px.
 
 ## Third-party code
 
 - md4c 0.5.2 (MIT), in `Sources/md4c`.
-- Marky Markdown view, in `Sources/FAReader/Marky`.
+- Marky markdown view, in `Sources/FAReader/Marky`. It is first-party code written in this repository. It calls md4c, which is MIT.

@@ -1,5 +1,7 @@
 import AppKit
+import CryptoKit
 import FACore
+import IOKit
 import PDFKit
 import SwiftUI
 
@@ -90,6 +92,13 @@ private struct LoadedBook: @unchecked Sendable {
     let document: PDFDocument
     let sections: [FACore.Section]
     let store: Result<Store, Error>
+    let bookID: String?
+    let migration: SidecarMigrationReport
+}
+
+private struct FileScope {
+    var url: URL
+    var stop: Bool
 }
 
 @MainActor
@@ -125,6 +134,7 @@ final class AppModel: ObservableObject {
     @Published var pendingUndo: PendingUndo?
     @Published var showImport = false
     @Published var importPreview: ImportPreview?
+    @Published var importFailure: String?
 
     @Published var query = "" {
         didSet {
@@ -157,6 +167,10 @@ final class AppModel: ObservableObject {
     lazy var marky: MarkyView = makeMarky()
     private(set) var notesURL: URL?
     private var notesSectionID: Int?
+    private(set) var notesBlocked = false
+    private(set) var notesLoading = false
+    private var notesLoadToken = 0
+    private var notesLoadingSectionID: Int?
     private var notesDirty = false
     private var notesSaveWork: DispatchWorkItem?
     private var exportWork: DispatchWorkItem?
@@ -210,7 +224,11 @@ final class AppModel: ObservableObject {
         case nil: return colors
         }
     }
-    @Published var recentBooks: [String] = UserDefaults.standard.stringArray(forKey: "recentPDFs") ?? []
+    @Published var recentBooks: [SavedBookmark] = AppModel.loadRecents()
+    private var currentBookID: String?
+    private var bookScope: FileScope?
+    private var exportScope: FileScope?
+    private var didRestoreExport = false
     @Published var selectedResultID: String?
     private(set) var thumbnailer: Thumbnailer?
     private var keyMonitor: Any?
@@ -228,20 +246,39 @@ final class AppModel: ObservableObject {
     private var pendingURL: URL?
     private var isLoading = false
     private var openToken = 0
+    private(set) var tidyTask: Task<Void, Never>?
     private let latestOpenToken = LockedCounter()
+    private var indexToken = 0
+    private let latestIndexToken = LockedCounter()
     private var searchSeq = 0
     private var searchInFlight = false
     private var queuedSearchActions: [@MainActor () -> Void] = []
     private var started = false
+#if !APPSTORE
     private var openReported = false
     fileprivate var searchReported = false
+#endif
     private var timer: Timer?
     private let arguments = CommandLine.arguments
+#if DEBUG
     var selfCheck: SelfCheck?
+#endif
 
+#if !APPSTORE
     var measureOpen: Bool { arguments.contains("--measure-open") }
-    var isTestRun: Bool { measureOpen || selfCheck != nil }
     private var exitAfterMeasure: Bool { arguments.contains("--exit") }
+#endif
+    var isTestRun: Bool {
+#if DEBUG && !APPSTORE
+        measureOpen || selfCheck != nil
+#elseif DEBUG
+        selfCheck != nil
+#elseif !APPSTORE
+        measureOpen
+#else
+        false
+#endif
+    }
 
     private init() {
         pdfView.configure()
@@ -264,12 +301,16 @@ final class AppModel: ObservableObject {
             let text = h.text.count > 30 ? h.text.prefix(30) + "…" : h.text
             return "“\(text)” (\(h.highlightColor.name.capitalized))"
         }
+#if DEBUG
         if let i = arguments.firstIndex(of: "--self-check"), i + 1 < arguments.count {
             selfCheck = SelfCheck(report: URL(fileURLWithPath: arguments[i + 1]))
         }
-        if measureOpen || selfCheck != nil {
+#endif
+#if !APPSTORE
+        if isTestRun {
             pdfView.onFirstDraw = { [weak self] in self?.reportOpenTime() }
         }
+#endif
         let center = NotificationCenter.default
         center.addObserver(forName: .PDFViewPageChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updatePageLabel() }
@@ -305,17 +346,15 @@ final class AppModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.sync() }
         }
+        restoreExportFolder()
+#if !APPSTORE
         if let i = arguments.firstIndex(of: "--pdf"), i + 1 < arguments.count {
             open(URL(fileURLWithPath: arguments[i + 1]))
-        } else if let last = UserDefaults.standard.string(forKey: "lastPDF"), FileManager.default.fileExists(atPath: last) {
-            open(URL(fileURLWithPath: last))
-        } else {
-            let fallback = ("~/Library/Mobile Documents/com~apple~CloudDocs/School/MS1/Textbooks/first aid.pdf" as NSString).expandingTildeInPath
-            if FileManager.default.fileExists(atPath: fallback) {
-                open(URL(fileURLWithPath: fallback))
-            } else {
-                openPanel()
-            }
+            return
+        }
+#endif
+        if let restored = restoredLastBook() {
+            open(restored.url, knownBookmark: restored.bookmark, knownBookID: restored.bookID)
         }
     }
 
@@ -326,8 +365,8 @@ final class AppModel: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url { open(url) }
     }
 
-    func open(_ url: URL, completion: (() -> Void)? = nil) {
-        if url == pdfURL, document != nil {
+    func open(_ url: URL, knownBookmark: Data? = nil, knownBookID: String? = nil, completion: (() -> Void)? = nil) {
+        if let pdfURL, sameFile(url, pdfURL), document != nil {
             openToken += 1
             latestOpenToken.value = openToken
             isLoading = false
@@ -338,6 +377,8 @@ final class AppModel: ObservableObject {
             }
             return
         }
+        let pendingScope = startScope(url)
+        let bookmark = knownBookmark ?? (try? BookmarkStore.data(for: url))
         flushNote()
         openToken += 1
         let token = openToken
@@ -345,20 +386,30 @@ final class AppModel: ObservableObject {
         let latest = latestOpenToken
         isLoading = true
         let device = deviceID
+        let sandboxed = AppSandbox.isActive
+        let rememberedID = knownBookID
+        let priorID = knownBookID ?? recentBooks.first(where: { $0.path == url.path })?.bookID
         DispatchQueue.global(qos: .userInitiated).async {
             let loaded = PDFDocument(url: url).flatMap { doc -> LoadedBook? in
                 let sections = Sections.from(document: doc)
                 guard latest.value == token else { return nil }
-                return LoadedBook(document: doc, sections: sections, store: Result {
-                    try Store(pdfURL: url, device: device, deviceName: Host.current().localizedName ?? "Mac")
-                })
+                let prepared = Result { try Self.prepareBook(pdfURL: url, sandboxed: sandboxed, knownBookID: priorID, device: device) }
+                let store = prepared.flatMap { prepared in
+                    Result { try Store(folder: prepared.folder, device: device, deviceName: Host.current().localizedName ?? "Mac") }
+                }
+                return LoadedBook(document: doc, sections: sections, store: store,
+                                  bookID: (try? prepared.get())?.bookID ?? rememberedID,
+                                  migration: (try? prepared.get())?.migration ?? .none)
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     let model = AppModel.shared
-                    guard model.openToken == token else { return }
+                    guard model.openToken == token else {
+                        model.stopScope(pendingScope)
+                        return
+                    }
                     model.isLoading = false
-                    model.finishOpen(url, loaded: loaded, completion: completion)
+                    model.finishOpen(url, loaded: loaded, scope: pendingScope, bookmark: bookmark, completion: completion)
                     if let pending = model.pendingURL {
                         model.pendingURL = nil
                         model.handle(url: pending)
@@ -368,32 +419,46 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func finishOpen(_ url: URL, loaded: LoadedBook?, completion: (() -> Void)?) {
+    nonisolated private static func prepareBook(pdfURL: URL, sandboxed: Bool, knownBookID: String?, device: String) throws -> OpenedBookData {
+        let ubiquity = sandboxed ? FileManager.default.url(forUbiquityContainerIdentifier: BookDataLocator.ubiquityContainerIdentifier) : nil
+        let support = sandboxed ? try BookDataLocator.applicationSupportDirectory() : nil
+        return try BookOpener.prepare(pdfURL: pdfURL, sandboxed: sandboxed, ubiquityContainer: ubiquity, applicationSupport: support, knownBookID: knownBookID, device: device)
+    }
+
+    private func finishOpen(_ url: URL, loaded: LoadedBook?, scope: FileScope, bookmark: Data?, completion: (() -> Void)?) {
         guard let loaded else {
-            notify("Cannot open \(url.lastPathComponent)", info: OpenFailure.reason(for: url))
+            let reason = OpenFailure.reason(for: url)
+            stopScope(scope)
+            notify("Cannot open \(url.lastPathComponent)", info: reason)
+            return
+        }
+        let doc = loaded.document
+        let newStore: Store
+        do {
+            newStore = try loaded.store.get()
+        } catch {
+            stopScope(scope)
+            NSLog("Cannot open the annotation store: \(error)")
+            let info = (error as? DatabaseError)?.isNewerSchema == true ? "\(error)" : "The annotation file could not be read. Close the book and open it again."
+            notify("Cannot open the annotation store", info: info)
             return
         }
         searchSeq += 1
         searchInFlight = false
         queuedSearchActions = []
         runner?.cancel()
-        let doc = loaded.document
-        let newStore: Store
-        do {
-            newStore = try loaded.store.get()
-        } catch {
-            notify("Cannot open the annotation store", info: "\(error)")
-            return
-        }
+        adoptBookScope(scope)
         select(nil)
         clearRendered()
         newStore.logQueue = folderQueue
         folderQueue.async { try? newStore.flushLog() }
         store = newStore
+        currentBookID = loaded.bookID
         undoStack = (try? newStore.recentChanges()) ?? []
         redoStack = []
         notice = nil
-        let lastPage = UserDefaults.standard.object(forKey: "lastPage:\(url.path)") as? Int
+        let lastPage = (loaded.bookID.flatMap { UserDefaults.standard.object(forKey: "lastPage:\($0)") as? Int })
+            ?? (UserDefaults.standard.object(forKey: "lastPage:\(url.path)") as? Int)
         pdfURL = url
         document = doc
         sections = loaded.sections
@@ -407,9 +472,11 @@ final class AppModel: ObservableObject {
         results = []
         query = ""
         if !isTestRun {
-            UserDefaults.standard.set(url.path, forKey: "lastPDF")
-            recentBooks = [url.path] + recentBooks.filter { $0 != url.path }.prefix(9)
-            UserDefaults.standard.set(recentBooks, forKey: "recentPDFs")
+            if let bookmark {
+                remember(url: url, bookmark: bookmark, bookID: loaded.bookID)
+            } else if !AppSandbox.isActive {
+                UserDefaults.standard.set(url.path, forKey: BookmarkLibrary.legacyLastKey)
+            }
         }
         runner = try? SearchRunner(databasePath: newStore.folder.databaseURL.path)
         thumbnailer = Thumbnailer(url: url)
@@ -422,14 +489,151 @@ final class AppModel: ObservableObject {
         startIndexing(url: url, pageCount: doc.pageCount)
         notesSectionID = nil
         refreshNotes(force: true)
+        maybeOfferSidecarImport(loaded.migration)
         completion?()
     }
 
     private var deviceID: String {
-        if let id = UserDefaults.standard.string(forKey: "deviceID") { return id }
-        let id = UUID().uuidString.lowercased()
-        UserDefaults.standard.set(id, forKey: "deviceID")
-        return id
+        let defaults = UserDefaults.standard
+        let resolved = DeviceIdentity.resolve(
+            storedID: defaults.string(forKey: "deviceID"),
+            storedMachineHash: defaults.string(forKey: "deviceMachineHash"),
+            currentMachineHash: Self.currentMachineHash())
+        defaults.set(resolved.id, forKey: "deviceID")
+        if let hash = resolved.machineHash { defaults.set(hash, forKey: "deviceMachineHash") }
+        return resolved.id
+    }
+
+    private static func currentMachineHash() -> String? {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+        guard let uuid = IORegistryEntryCreateCFProperty(service, kIOPlatformUUIDKey as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? String else { return nil }
+        return SHA256.hash(data: Data(uuid.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func loadRecents() -> [SavedBookmark] {
+        let defaults = UserDefaults.standard
+        if defaults.data(forKey: BookmarkLibrary.recentsKey) != nil {
+            return BookmarkLibrary.recents(from: defaults)
+        }
+        guard defaults.object(forKey: BookmarkLibrary.legacyRecentsKey) != nil else { return [] }
+        let converted = (defaults.stringArray(forKey: BookmarkLibrary.legacyRecentsKey) ?? []).compactMap { path -> SavedBookmark? in
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: path) else { return nil }
+            return try? SavedBookmark.capturing(url, bookID: nil)
+        }
+        BookmarkLibrary.saveRecents(converted, to: defaults)
+        return converted
+    }
+
+    private struct RestoredBook {
+        var url: URL
+        var bookmark: Data?
+        var bookID: String?
+    }
+
+    private func restoredLastBook() -> RestoredBook? {
+        if let saved = BookmarkLibrary.lastBook(from: .standard), let resolved = try? BookmarkStore.resolve(saved.data) {
+            let scope = startScope(resolved.url)
+            let exists = FileManager.default.fileExists(atPath: resolved.url.path)
+            var data = saved.data
+            if exists, resolved.isStale, let fresh = try? BookmarkStore.data(for: resolved.url) { data = fresh }
+            stopScope(scope)
+            if exists {
+                return RestoredBook(url: resolved.url, bookmark: data, bookID: saved.bookID)
+            }
+        }
+        if let last = UserDefaults.standard.string(forKey: BookmarkLibrary.legacyLastKey), FileManager.default.fileExists(atPath: last) {
+            return RestoredBook(url: URL(fileURLWithPath: last), bookmark: nil, bookID: nil)
+        }
+        return nil
+    }
+
+    private func remember(url: URL, bookmark: Data, bookID: String?) {
+        let saved = SavedBookmark(path: url.path, name: url.lastPathComponent, bookID: bookID, data: bookmark)
+        let rest = recentBooks.filter { $0.path != saved.path && (bookID == nil || $0.bookID != bookID) }
+        recentBooks = Array(([saved] + rest).prefix(10))
+        BookmarkLibrary.saveRecents(recentBooks, to: .standard)
+        BookmarkLibrary.saveLastBook(saved, to: .standard)
+        UserDefaults.standard.set(url.path, forKey: BookmarkLibrary.legacyLastKey)
+    }
+
+    private func dropRecent(_ book: SavedBookmark) {
+        recentBooks.removeAll { $0.path == book.path && $0.bookID == book.bookID }
+        BookmarkLibrary.saveRecents(recentBooks, to: .standard)
+        if BookmarkLibrary.lastBook(from: .standard)?.path == book.path {
+            BookmarkLibrary.saveLastBook(recentBooks.first, to: .standard)
+        }
+    }
+
+    private func sameFile(_ a: URL, _ b: URL) -> Bool {
+        a.standardizedFileURL.path == b.standardizedFileURL.path
+    }
+
+    private func startScope(_ url: URL) -> FileScope {
+        FileScope(url: url, stop: url.startAccessingSecurityScopedResource())
+    }
+
+    private func stopScope(_ scope: FileScope?) {
+        if let scope, scope.stop { scope.url.stopAccessingSecurityScopedResource() }
+    }
+
+    private func adoptBookScope(_ scope: FileScope) {
+        if let existing = bookScope, sameFile(existing.url, scope.url) {
+            stopScope(scope)
+            return
+        }
+        stopScope(bookScope)
+        bookScope = scope
+    }
+
+    private func restoreExportFolder() {
+        guard !didRestoreExport else { return }
+        didRestoreExport = true
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: BookmarkLibrary.exportKey), let resolved = try? BookmarkStore.resolve(data) {
+            let scope = startScope(resolved.url)
+            if resolved.isStale, let fresh = try? BookmarkStore.data(for: resolved.url) {
+                defaults.set(fresh, forKey: BookmarkLibrary.exportKey)
+            }
+            stopScope(scope)
+            adoptExport(resolved.url)
+            return
+        }
+        guard let path = defaults.string(forKey: BookmarkLibrary.legacyExportKey) else { return }
+        let url = URL(fileURLWithPath: path, isDirectory: true)
+        let scope = startScope(url)
+        let exists = FileManager.default.fileExists(atPath: path)
+        stopScope(scope)
+        guard exists, let data = try? BookmarkStore.data(for: url) else { return }
+        defaults.set(data, forKey: BookmarkLibrary.exportKey)
+        defaults.removeObject(forKey: BookmarkLibrary.legacyExportKey)
+        adoptExport(url)
+    }
+
+    private func adoptExport(_ url: URL) {
+        stopScope(exportScope)
+        exportScope = startScope(url)
+    }
+
+    /// Once, the first time a sandboxed book has no highlights and its old sidecar could not be read on its own.
+    private func maybeOfferSidecarImport(_ report: SidecarMigrationReport) {
+#if !APPSTORE
+        guard AppSandbox.isActive, !isTestRun, store != nil else { return }
+        guard report.copiedLogs.isEmpty, report.copiedMarkdown.isEmpty else { return }
+        guard ((try? store?.highlights()) ?? []).isEmpty else { return }
+        let key = "didOfferLegacyHighlightImport"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        let alert = NSAlert()
+        alert.messageText = "Import highlights stored next to the PDF?"
+        alert.informativeText = "Older versions kept each book's highlights in a folder next to the PDF. If this book has one, choose that folder (or the folder that contains the PDF). You can also do this later from the File menu."
+        alert.addButton(withTitle: "Choose Folder…")
+        alert.addButton(withTitle: "Not Now")
+        if alert.runModal() == .alertFirstButtonReturn { importSidecarFolder() }
+#endif
     }
 
     private func clearRendered() {
@@ -441,6 +645,7 @@ final class AppModel: ObservableObject {
 
     // MARK: Timing
 
+#if !APPSTORE
     private func processStartMs() -> Double {
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
@@ -453,7 +658,9 @@ final class AppModel: ObservableObject {
     private func reportOpenTime() {
         pdfView.onFirstDraw = nil
         let ms = Date().timeIntervalSince1970 * 1000 - processStartMs()
+#if DEBUG
         selfCheck?.run(openMs: ms)
+#endif
         print("open_ms=\(Int(ms.rounded()))")
         fflush(stdout)
         openReported = true
@@ -489,31 +696,51 @@ final class AppModel: ObservableObject {
             }
         }
     }
+#endif
 
     // MARK: Book index
 
     private func startIndexing(url: URL, pageCount: Int) {
         guard let dbPath = store?.folder.databaseURL.path else { return }
         indexProgress = nil
+        indexToken += 1
+        let token = indexToken
+        latestIndexToken.value = token
+        let latest = latestIndexToken
         DispatchQueue.global(qos: .utility).async {
             do {
                 let db = try Database(path: dbPath)
                 if try !BookIndex.isIndexed(db: db, pageCount: pageCount) {
                     guard let doc = PDFDocument(url: url) else { return }
                     try BookIndex.index(document: doc, into: db) { done, total in
-                        DispatchQueue.main.async { MainActor.assumeIsolated { AppModel.shared.indexProgress = (done, total) } }
+                        guard latest.value == token else { throw CancellationError() }
+                        DispatchQueue.main.async {
+                            MainActor.assumeIsolated {
+                                let model = AppModel.shared
+                                if model.indexToken == token { model.indexProgress = (done, total) }
+                            }
+                        }
                     }
                 }
+            } catch is CancellationError {
+                return
             } catch {
-                DispatchQueue.main.async { MainActor.assumeIsolated { AppModel.shared.indexProgress = nil } }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        if AppModel.shared.indexToken == token { AppModel.shared.indexProgress = nil }
+                    }
+                }
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     let model = AppModel.shared
+                    guard model.indexToken == token else { return }
                     model.indexProgress = nil
                     model.printedCache = [:]
                     model.updatePageLabel()
+#if !APPSTORE
                     model.runSearchMeasurement()
+#endif
                 }
             }
         }
@@ -542,7 +769,10 @@ final class AppModel: ObservableObject {
         guard document != nil else { pageState.label = ""; return }
         let index = currentPageIndex
         refreshNotes()
-        if let url = pdfURL, !isTestRun { UserDefaults.standard.set(index, forKey: "lastPage:\(url.path)") }
+        if let url = pdfURL, !isTestRun {
+            UserDefaults.standard.set(index, forKey: "lastPage:\(url.path)")
+            if let currentBookID { UserDefaults.standard.set(index, forKey: "lastPage:\(currentBookID)") }
+        }
         let pdf = "PDF \(index + 1) of \(pageCount)"
         let section = Sections.section(for: index, in: sections)
         if pageState.index != index { pageState.index = index }
@@ -970,47 +1200,45 @@ final class AppModel: ObservableObject {
 
     /// Builds a highlight from page characters, one box per text line.
     private func highlight(from piece: Piece, page: PDFPage, index: Int, text: PageText) -> Highlight? {
-        var rects: [Rect] = []
-        var strings: [String] = []
-        for r in text.runs(piece.chars) {
-            for line in pdfView.lineBoxes(for: r, on: page) {
-                rects.append(Rect(x: line.rect.minX, y: line.rect.minY, w: line.rect.width, h: line.rect.height))
-                strings.append(line.text)
-            }
-        }
-        guard !rects.isEmpty else { return nil }
-        let joined = strings.joined(separator: " ").split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-        return Highlight(id: piece.id ?? Highlight.newID(), page: index, rects: rects, text: joined, color: piece.color,
-                         note: piece.note, created: piece.created ?? Date().timeIntervalSince1970, source: piece.source ?? "app")
+        pdfView.geometry.highlight(from: piece, page: page, index: index, text: text)
     }
 
     /// Merges overlapping highlights and widens partial words on every page, as one change that Cmd+Z undoes.
     func tidyHighlights() {
-        guard let store, let document else { return }
-        let byPage = Dictionary(grouping: (try? store.highlights()) ?? [], by: \.page)
-        var ops: [PendingOp] = []
-        var before = 0, after = 0
-        var pages = 0
-        for index in byPage.keys.sorted() {
-            guard let page = document.page(at: index) else { continue }
-            let text = pdfView.pageText(page)
-            let plan = HighlightMerge.tidy(pageHighlights(index, page: page), text: text)
-            guard !plan.isEmpty else { continue }
-            let pieces = plan.pieces.compactMap { highlight(from: $0, page: page, index: index, text: text) }
-            ops += plan.removed.map(PendingOp.delete) + pieces.map(PendingOp.add)
-            before += plan.removed.count
-            after += pieces.count
-            pages += 1
+        guard tidyTask == nil, let store, let url = pdfURL else { return }
+        let highlights = (try? store.highlights()) ?? []
+        tidyTask = Task { @MainActor [weak self] in
+            let found = await Task.detached(priority: .userInitiated) { TidyPlanner.plan(url: url, highlights: highlights) }.value
+            guard let self else { return }
+            tidyTask = nil
+            guard self.store === store else { return }
+            guard let plan = found else {
+                notify("Could not tidy", info: "Rowlight could not read this PDF.")
+                return
+            }
+            guard ((try? store.highlights()) ?? []) == highlights else {
+                notify("Highlights changed", info: "Highlights changed while Rowlight checked them. Choose Tidy again.")
+                return
+            }
+            applyTidy(plan, store: store, highlights: highlights)
         }
-        guard !ops.isEmpty else {
+    }
+
+    private func applyTidy(_ plan: TidyPlan, store: Store, highlights: [Highlight]) {
+        guard !plan.ops.isEmpty else {
             notify("Nothing to tidy", info: "No highlights overlap and none stop partway through a word.")
             return
         }
+        let before = plan.before, after = plan.after, pages = plan.pages
         let message = "Tidy \(before) highlight\(before == 1 ? "" : "s") on \(pages) page\(pages == 1 ? "" : "s") into \(after)?"
         let info = "Overlapping highlights of one color are merged. Where colors overlap, the newer color wins. "
             + "Highlights that stop partway through a word are widened to the whole word. Cmd+Z undoes this."
         guard confirm(message, info: info, ok: "Tidy") else { return }
-        if commit({ _ in try store.commit(Plan(kind: .edit, label: "Edit", ops: ops), confirmed: true) }) {
+        guard ((try? store.highlights()) ?? []) == highlights else {
+            notify("Highlights changed", info: "Highlights changed while Rowlight checked them. Choose Tidy again.")
+            return
+        }
+        if commit({ _ in try store.commit(Plan(kind: .edit, label: "Edit", ops: plan.ops), confirmed: true) }) {
             select(nil)
             showNotice("Tidied \(before) highlights into \(after)")
         }
@@ -1068,9 +1296,10 @@ final class AppModel: ObservableObject {
             try body(false)
         } catch GuardError.needsConfirmation(let pages) {
             guard confirm("This will change \(pages) pages. Continue?") else { return false }
-            do { try body(true) } catch { notify("Change failed", info: "\(error)"); return false }
+            do { try body(true) } catch { print("change_failed \(error)"); notify("Change failed", info: "The change could not be saved. Try again."); return false }
         } catch {
-            notify("Change failed", info: "\(error)")
+            print("change_failed \(error)")
+            notify("Change failed", info: "The change could not be saved. Try again.")
             return false
         }
         if let store, let before, store.commitCount == before + 1 {
@@ -1123,7 +1352,9 @@ final class AppModel: ObservableObject {
     }
 
     func confirm(_ message: String, info: String = "", ok: String = "Continue") -> Bool {
+#if DEBUG
         if let check = selfCheck { check.alerts.append(message); return true }
+#endif
         let alert = NSAlert()
         alert.messageText = message
         alert.informativeText = info
@@ -1138,7 +1369,9 @@ final class AppModel: ObservableObject {
     }
 
     func notify(_ message: String, info: String = "") {
+#if DEBUG
         if let check = selfCheck { check.alerts.append("\(message) \(info)"); return }
+#endif
         let alert = NSAlert()
         alert.messageText = message
         alert.informativeText = info
@@ -1182,11 +1415,13 @@ final class AppModel: ObservableObject {
         pdfView.clearSelection()
     }
 
+#if DEBUG
     func abandonSearch() {
         searchSeq += 1
         searchInFlight = false
         queuedSearchActions = []
     }
+#endif
 
     private func deferUntilSearchDone(_ action: @escaping @MainActor () -> Void) -> Bool {
         if searchWork != nil {
@@ -1308,28 +1543,56 @@ final class AppModel: ObservableObject {
             open(url)
             return
         }
-        guard url.scheme == "fa-reader" else { return }
-        guard store != nil, !isLoading else { pendingURL = url; return }
-        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        if let path = items.first(where: { $0.name == "pdf" })?.value, path != pdfURL?.path,
-           FileManager.default.fileExists(atPath: path) {
-            open(URL(fileURLWithPath: path)) { [self] in jumpToLink(items) }
+        guard ["rowlight", "fa-reader"].contains(url.scheme?.lowercased()) else { return }
+        guard let link = ReaderLinkResolver.parse(url) else { return }
+        guard !isLoading else { pendingURL = url; return }
+        if openLinkedBook(link) { return }
+        let namesThisBook = (link.bookID != nil && link.bookID == currentBookID)
+            || (link.pdfPath != nil && link.pdfPath == pdfURL?.path)
+            || (link.bookID == nil && link.pdfPath == nil)
+        if store != nil, namesThisBook {
+            jump(to: link)
             return
         }
-        jumpToLink(items)
+        if store == nil, link.bookID == nil, link.pdfPath == nil {
+            pendingURL = url
+            return
+        }
+        notify("Cannot open that book", info: "Open the PDF once from File > Open so links to it work.")
     }
 
-    private func jumpToLink(_ items: [URLQueryItem]) {
-        let page = items.first { $0.name == "page" }?.value.flatMap(Int.init)
-        let id = items.first { $0.name == "highlight" }?.value
-        if let id, let h = try? store?.highlight(id: id) {
+    /// Opens the book a link names, when it is not the book already open. The page jump runs after that open finishes.
+    private func openLinkedBook(_ link: ReaderLink) -> Bool {
+        if let saved = ReaderLinkResolver.bookmark(for: link, in: recentBooks, currentBookID: currentBookID, currentPath: pdfURL?.path) {
+            guard let resolved = try? BookmarkStore.resolve(saved.data) else { return false }
+            let scope = startScope(resolved.url)
+            let exists = FileManager.default.fileExists(atPath: resolved.url.path)
+            var data = saved.data
+            if exists, resolved.isStale, let fresh = try? BookmarkStore.data(for: resolved.url) { data = fresh }
+            stopScope(scope)
+            guard exists else { return false }
+            open(resolved.url, knownBookmark: data, knownBookID: saved.bookID) { [weak self] in self?.jump(to: link) }
+            return true
+        }
+        if let path = ReaderLinkResolver.directPath(for: link, currentBookID: currentBookID, currentPath: pdfURL?.path),
+           FileManager.default.fileExists(atPath: path) {
+            open(URL(fileURLWithPath: path)) { [weak self] in self?.jump(to: link) }
+            return true
+        }
+        return false
+    }
+
+    private func jump(to link: ReaderLink) {
+        if let id = link.highlight, let h = try? store?.highlight(id: id) {
             goToHighlight(id: id, page: h.page)
-        } else if let page {
+        } else if let page = link.page, page >= 1, page <= (document?.pageCount ?? 0) {
             goTo(page: page - 1)
         }
         if isTestRun {
+            #if DEBUG
             print("handled_url book=\(pdfURL?.lastPathComponent ?? "") page=\(currentPageIndex)")
             fflush(stdout)
+            #endif
         } else {
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -1438,13 +1701,13 @@ final class AppModel: ObservableObject {
 
     /// Waits for log lines still queued for the log file. Called when the app quits.
     func flushLog() {
-        guard let store else { return }
-        folderQueue.sync { try? store.flushLog() }
+        folderQueue.sync { try? store?.flushLog() }
     }
 
     // MARK: History
 
     func refreshHistory() {
+        guard showHistory else { return }
         history = (try? store?.sessions()) ?? []
     }
 
@@ -1461,14 +1724,26 @@ final class AppModel: ObservableObject {
     // MARK: Import
 
     func beginImport() {
-        guard store != nil, let url = pdfURL else { return }
+        guard let startStore = store, let url = pdfURL else { return }
         importPreview = nil
+        importFailure = nil
         showImport = true
         Task { @MainActor in
-            guard let fresh = PDFDocument(url: url) else { return }
+            guard let fresh = PDFDocument(url: url) else {
+                importFailure = "Rowlight could not read this PDF to scan its annotations."
+                return
+            }
             let scanned = await Task.detached(priority: .userInitiated) { PreviewImporter.scan(fresh) }.value
-            guard showImport, let store else { return }
-            let already = (try? store.importedHighlightIDs()) ?? []
+            guard showImport, let store, store === startStore else {
+                if showImport { importFailure = "The book changed while Rowlight scanned it. Close this window and choose Import again." }
+                return
+            }
+            let already: Set<String>
+            do { already = try store.importedHighlightIDs() } catch {
+                print("import_scan_failed \(error)")
+                importFailure = "Rowlight could not check which highlights are already imported."
+                return
+            }
             importPreview = PreviewImporter.preview(annotations: scanned, alreadyImported: already)
         }
     }
@@ -1485,9 +1760,9 @@ final class AppModel: ObservableObject {
     // MARK: Export
 
     var exportDirectory: URL? {
-        if let path = UserDefaults.standard.string(forKey: "exportFolder"), let pdfURL {
-            return URL(fileURLWithPath: path, isDirectory: true)
-                .appendingPathComponent(pdfURL.deletingPathExtension().lastPathComponent, isDirectory: true)
+        restoreExportFolder()
+        if let root = exportScope?.url, let pdfURL {
+            return root.appendingPathComponent(pdfURL.deletingPathExtension().lastPathComponent, isDirectory: true)
         }
         return store?.folder.markdownURL
     }
@@ -1498,46 +1773,127 @@ final class AppModel: ObservableObject {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Choose"
-        if panel.runModal() == .OK, let url = panel.url { UserDefaults.standard.set(url.path, forKey: "exportFolder") }
+        if panel.runModal() == .OK, let url = panel.url {
+            let scope = startScope(url)
+            guard let data = try? BookmarkStore.data(for: url) else {
+                stopScope(scope)
+                notify("Could not remember that folder", info: "The folder could not be saved for later opens.")
+                return
+            }
+            stopScope(scope)
+            UserDefaults.standard.set(data, forKey: BookmarkLibrary.exportKey)
+            UserDefaults.standard.removeObject(forKey: BookmarkLibrary.legacyExportKey)
+            adoptExport(url)
+        }
     }
 
     func exportMarkdown() {
         guard let store, let dir = exportDirectory else { return }
-        do {
-            let result = try MarkdownExporter.export(store: store, sections: sections, to: dir, printedPage: { page in
-                try? BookIndex.printedPage(db: store.db, page: page)
-            }, pdf: pdfURL)
-            let alert = NSAlert()
-            alert.messageText = "Markdown exported"
-            alert.informativeText = "\(result.written.count) written, \(result.unchanged.count) unchanged, \(result.removed.count) removed\n\(dir.path)"
-            alert.addButton(withTitle: "OK")
-            alert.addButton(withTitle: "Show in Finder")
-            if alert.runModal() == .alertSecondButtonReturn {
-                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                NSWorkspace.shared.activateFileViewerSelecting([dir])
+        saveNotes()
+        let highlights = allHighlights, sections = sections, pdf = pdfURL, bookID = currentBookID
+        var printedPages: [Int: String] = [:]
+        for page in Set(highlights.map(\.page)) { printedPages[page] = printed(page) }
+        let scope = exportScope.flatMap { startScope($0.url) }
+        folderQueue.async {
+            let outcome = Result {
+                try MarkdownExporter.export(highlights: highlights, sections: sections, to: dir, printedPage: { printedPages[$0] }, pdf: pdf, bookID: bookID)
             }
-        } catch {
-            notify("Export failed", info: "\(error)")
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let model = AppModel.shared
+                    model.stopScope(scope)
+                    if model.store === store { model.refreshNotes(force: true) }
+                    switch outcome {
+                    case .success(let result):
+                        let alert = NSAlert()
+                        alert.messageText = "Markdown exported"
+                        alert.informativeText = "\(result.written.count) written, \(result.unchanged.count) unchanged, \(result.removed.count) removed\n\(dir.path)"
+                        alert.addButton(withTitle: "OK")
+                        alert.addButton(withTitle: "Show in Finder")
+                        if alert.runModal() == .alertSecondButtonReturn {
+                            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                            NSWorkspace.shared.activateFileViewerSelecting([dir])
+                        }
+                    case .failure(let error):
+                        NSLog("Rowlight markdown export failed: %@", "\(error)")
+                        model.notify("Export failed", info: "Rowlight could not save the notes file.")
+                    }
+                }
+            }
         }
     }
 }
 
 extension AppModel {
-    var bookTitle: String { pdfURL?.deletingPathExtension().lastPathComponent ?? "FA Reader" }
+    var bookTitle: String { pdfURL?.deletingPathExtension().lastPathComponent ?? Branding.displayName }
 
-    func openRecent(_ path: String) {
-        guard FileManager.default.fileExists(atPath: path) else {
-            recentBooks.removeAll { $0 == path }
-            UserDefaults.standard.set(recentBooks, forKey: "recentPDFs")
-            notify("\((path as NSString).lastPathComponent) is no longer at \(path)")
+    func openRecent(_ book: SavedBookmark) {
+        guard let resolved = try? BookmarkStore.resolve(book.data) else {
+            dropRecent(book)
+            notify("\(book.name) could not be opened", info: "Open it again from File > Open.")
             return
         }
-        open(URL(fileURLWithPath: path))
+        let scope = startScope(resolved.url)
+        let exists = FileManager.default.fileExists(atPath: resolved.url.path)
+        var data = book.data
+        if exists, resolved.isStale, let fresh = try? BookmarkStore.data(for: resolved.url) { data = fresh }
+        stopScope(scope)
+        guard exists else {
+            dropRecent(book)
+            notify("\(book.name) is no longer available", info: resolved.url.path)
+            return
+        }
+        open(resolved.url, knownBookmark: data, knownBookID: book.bookID)
     }
 
     func clearRecent() {
-        recentBooks = pdfURL.map { [$0.path] } ?? []
-        UserDefaults.standard.set(recentBooks, forKey: "recentPDFs")
+        if let current = recentBooks.first(where: { $0.path == pdfURL?.path || ($0.bookID != nil && $0.bookID == currentBookID) }) {
+            recentBooks = [current]
+        } else {
+            recentBooks = []
+        }
+        BookmarkLibrary.saveRecents(recentBooks, to: .standard)
+    }
+
+    func importSidecarFolder() {
+        guard let store, let pdfURL else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "Import"
+        panel.message = "Choose the folder next to the PDF whose name ends in .fa-reader, or the folder that contains the PDF."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let scope = startScope(url)
+        defer { stopScope(scope) }
+        let sidecar = SidecarMigration.root(selected: url, pdfURL: pdfURL)
+        let report = SidecarMigration.migrate(from: SyncFolder(root: sidecar), to: store.folder)
+        if report.copiedLogs.isEmpty, report.copiedMarkdown.isEmpty {
+            notify("Nothing new to import", info: report.sidecarReadable
+                   ? "No change logs or notes in \(sidecar.lastPathComponent) were missing from this book."
+                   : "That folder could not be read.")
+            return
+        }
+        if !report.copiedLogs.isEmpty {
+            folderQueue.async {
+                let reads = (try? store.readLogs()) ?? []
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        let model = AppModel.shared
+                        guard model.store === store else { return }
+                        if ((try? store.apply(reads)) ?? 0) > 0 {
+                            model.loadPreviewRects()
+                            model.reconcile()
+                            model.refreshHistory()
+                            model.scheduleExport()
+                        }
+                        model.refreshNotes(force: true)
+                    }
+                }
+            }
+        } else {
+            refreshNotes(force: true)
+        }
+        notify("Imported highlights", info: "\(report.copiedLogs.count) change logs and \(report.copiedMarkdown.count) notes copied from \(sidecar.lastPathComponent).")
     }
 }
 
@@ -1547,7 +1903,7 @@ extension AppModel {
         m.mode = MarkyView.Mode(rawValue: notesMode) ?? .preview
         m.onTextChange = { [weak self] in self?.notesChanged() }
         m.openURL = { [weak self] url in
-            guard url.scheme == "fa-reader" else { return false }
+            guard ["rowlight", "fa-reader"].contains(url.scheme?.lowercased() ?? "") else { return false }
             self?.handle(url: url)
             return true
         }
@@ -1565,51 +1921,127 @@ extension AppModel {
 
     func saveNotes() {
         notesSaveWork?.cancel()
-        guard notesDirty, let url = notesURL else { return }
+        guard notesDirty, !notesBlocked, !notesLoading, let url = notesURL else { return }
         notesDirty = false
+        writeNotes(Data(marky.text.utf8), to: url)
+    }
+
+    private func writeNotes(_ data: Data, to url: URL) {
+        folderQueue.async { [weak self] in Self.writeNotesFile(data, to: url, model: self) }
+    }
+
+    private nonisolated static func writeNotesFile(_ data: Data, to url: URL, model: AppModel?) {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data(marky.text.utf8).write(to: url, options: .atomic)
+            try MarkdownExporter.coordinated(url, options: .forReplacing) { try data.write(to: $0, options: .atomic) }
         } catch {
-            notify("Could not save notes", info: "\(error.localizedDescription)")
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { model?.notify("Could not save notes", info: "\(error.localizedDescription)") }
+            }
         }
+    }
+
+    private func beginNotesLoad(sectionID: Int? = nil) -> Int {
+        saveNotes()
+        notesLoadingSectionID = sectionID
+        notesLoadToken += 1
+        notesLoading = true
+        marky.isReadOnly = true
+        return notesLoadToken
+    }
+
+    private func endNotesLoad() {
+        notesLoading = false
+        notesLoadingSectionID = nil
+        marky.isReadOnly = notesBlocked || notesURL == nil
     }
 
     func refreshNotes(force: Bool = false) {
         guard notesShown, let store, let dir = exportDirectory else { return }
         let section = Sections.section(for: currentPageIndex, in: sections)
         guard force || section?.id != notesSectionID else { return }
-        saveNotes()
-        notesSectionID = section?.id
+        guard force || section == nil || !notesLoading || section?.id != notesLoadingSectionID else { return }
+        let token = beginNotesLoad(sectionID: section?.id)
+        notesBlocked = false
         guard let section else {
+            notesSectionID = nil
+            notesDirty = false
             notesURL = nil
             notesTitle = "Notes"
             marky.text = ""
+            endNotesLoad()
             return
         }
         let url = dir.appendingPathComponent(MarkdownExporter.fileName(for: section))
-        let existing = try? String(contentsOf: url, encoding: .utf8)
-        var text = existing ?? ""
-        if existing == nil || existing.map(MarkdownExporter.hasMarker) == true {
-            let highlights = ((try? store.highlights()) ?? []).filter { section.pages.contains($0.page) }
-            text = MarkdownExporter.merge(existing: existing, section: section, highlights: highlights,
-                                          printedPage: { [weak self] in self?.printed($0) }, pdf: pdfURL)
-            if existing != nil, existing != text { try? Data(text.utf8).write(to: url, options: .atomic) }
+        let highlights = ((try? store.highlights()) ?? []).filter { section.pages.contains($0.page) }
+        var labels: [Int: String] = [:]
+        for page in section.pages { if let label = printed(page) { labels[page] = label } }
+        let pdf = pdfURL, bookID = currentBookID
+        folderQueue.async { [weak self] in
+            var text = ""
+            var blocked = false
+            switch MarkdownExporter.readExisting(at: url) {
+            case .blocked:
+                blocked = true
+            case .text(let content):
+                text = content
+                if MarkdownExporter.hasMarker(content),
+                   let merged = MarkdownExporter.merge(existing: content, section: section, highlights: highlights,
+                                                       printedPage: { labels[$0] }, pdf: pdf, bookID: bookID) {
+                    text = merged
+                    if merged != content { Self.writeNotesFile(Data(merged.utf8), to: url, model: self) }
+                }
+            case .missing:
+                if let merged = MarkdownExporter.merge(existing: nil, section: section, highlights: highlights,
+                                                       printedPage: { labels[$0] }, pdf: pdf, bookID: bookID) {
+                    text = merged
+                }
+            }
+            let result = (text, blocked)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.notesLoadToken == token else { return }
+                    if result.1 {
+                        NSLog("Rowlight notes file is unreadable or not downloaded: %@", url.path)
+                        self.notesURL = nil
+                        self.notesBlocked = true
+                        self.notesSectionID = nil
+                        self.notesDirty = false
+                        self.notesTitle = section.title
+                        if !self.marky.text.isEmpty { self.marky.text = "" }
+                    } else {
+                        self.notesBlocked = false
+                        self.notesSectionID = section.id
+                        self.notesURL = url
+                        self.notesTitle = section.title
+                        self.marky.baseURL = dir
+                        if self.marky.text != result.0 { self.marky.text = result.0 }
+                        self.notesDirty = false
+                    }
+                    self.endNotesLoad()
+                }
+            }
         }
-        notesURL = url
-        notesTitle = section.title
-        marky.baseURL = dir
-        if marky.text != text { marky.text = text }
     }
 
     func showNotesFile(_ file: URL) {
-        saveNotes()
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else { beep(); return }
-        notesURL = file
-        notesSectionID = -1
-        notesTitle = file.deletingPathExtension().lastPathComponent
-        marky.baseURL = file.deletingLastPathComponent()
-        marky.text = text
+        let token = beginNotesLoad()
+        folderQueue.async { [weak self] in
+            let text = try? String(contentsOf: file, encoding: .utf8)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.notesLoadToken == token else { return }
+                    defer { self.endNotesLoad() }
+                    guard let text else { self.beep(); return }
+                    self.notesBlocked = false
+                    self.notesURL = file
+                    self.notesSectionID = -1
+                    self.notesTitle = file.deletingPathExtension().lastPathComponent
+                    self.marky.baseURL = file.deletingLastPathComponent()
+                    self.marky.text = text
+                }
+            }
+        }
     }
 
     func revealNotes() {
@@ -1628,11 +2060,12 @@ extension AppModel {
         exportWork?.cancel()
         guard let store, let dir = exportDirectory else { return }
         saveNotes()
-        let highlights = allHighlights, sections = sections, pdf = pdfURL
+        let highlights = allHighlights, sections = sections, pdf = pdfURL, bookID = currentBookID
         var printedPages: [Int: String] = [:]
         for page in Set(highlights.map(\.page)) { printedPages[page] = printed(page) }
-        let write = { _ = try? MarkdownExporter.export(highlights: highlights, sections: sections, to: dir, printedPage: { printedPages[$0] }, pdf: pdf) }
+        let write = { _ = try? MarkdownExporter.export(highlights: highlights, sections: sections, to: dir, printedPage: { printedPages[$0] }, pdf: pdf, bookID: bookID) }
         if isTestRun {
+            folderQueue.sync {}
             write()
             refreshNotes(force: true)
             return

@@ -3,6 +3,7 @@ import PDFKit
 
 public enum BookIndex {
     static let version = "2"
+    static let batchSize = 50
 
     public static func isIndexed(db: Database, pageCount: Int) throws -> Bool {
         let rows = (try db.scalar("SELECT COUNT(*) FROM book_pages") as? Int64).map(Int.init) ?? 0
@@ -10,24 +11,28 @@ public enum BookIndex {
         return rows == pageCount && stored == version
     }
 
-    public static func index(document: PDFDocument, into db: Database, progress: ((Int, Int) -> Void)? = nil) throws {
+    public static func index(document: PDFDocument, into db: Database, progress: ((Int, Int) throws -> Void)? = nil) throws {
         let count = document.pageCount
         var raw: [String] = []
         raw.reserveCapacity(count)
         for i in 0..<count {
             raw.append(document.page(at: i)?.string ?? "")
-            progress?(i + 1, count)
+            try progress?(i + 1, count)
         }
         let texts = clean(raw)
         let printed = printedLabels(texts)
         try db.transaction {
-            try db.exec("DELETE FROM book_pages; DELETE FROM book_fts;")
-            for (i, text) in texts.enumerated() {
-                try db.run("INSERT INTO book_pages(page, printed, text) VALUES(?,?,?)", i, printed[i], text)
-                try db.run("INSERT INTO book_fts(rowid, text) VALUES(?,?)", i, text)
-            }
-            try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES('book_index_version', ?)", version)
+            try db.exec("DELETE FROM book_pages; DELETE FROM book_fts; DELETE FROM meta WHERE key='book_index_version';")
         }
+        for batch in stride(from: 0, to: texts.count, by: batchSize) {
+            try db.transaction {
+                for i in batch..<min(batch + batchSize, texts.count) {
+                    try db.run("INSERT INTO book_pages(page, printed, text) VALUES(?,?,?)", i, printed[i], texts[i])
+                    try db.run("INSERT INTO book_fts(rowid, text) VALUES(?,?)", i, texts[i])
+                }
+            }
+        }
+        try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES('book_index_version', ?)", version)
     }
 
     public static func printedPage(db: Database, page: Int) throws -> String? {

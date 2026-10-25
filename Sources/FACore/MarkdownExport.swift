@@ -7,11 +7,16 @@ public struct ExportResult: Equatable {
 }
 
 public enum MarkdownExporter {
-    public static let marker = "fa-reader-export: 1"
+    public static let marker = "rowlight-export: 1"
+    static let oldMarker = "fa-reader-export: 1"
+    private static let generatedKeys: Set<String> = ["book", "section", "parent", "pdf-pages", "highlights"]
 
-    public static func link(page: Int, highlight: String? = nil, pdf: URL? = nil) -> String {
-        var s = "fa-reader://open?page=\(page + 1)"
+    public static func link(page: Int, highlight: String? = nil, pdf: URL? = nil, bookID: String? = nil) -> String {
+        var s = "rowlight://open?page=\(page + 1)"
         if let highlight { s += "&highlight=\(highlight)" }
+        if let bookID, let id = bookID.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) {
+            s += "&book=\(id)"
+        }
         if let pdf, let path = pdf.path.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) {
             s += "&pdf=\(path)"
         }
@@ -31,18 +36,23 @@ public enum MarkdownExporter {
     public static let blockEnd = "<!-- fa-reader:highlights:end -->"
     public static let notesHeading = "## Notes"
 
-    public static func render(section: Section, highlights: [Highlight], printedPage: (Int) -> String?, pdf: URL? = nil) -> String {
-        merge(existing: nil, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf)
+    public static func render(section: Section, highlights: [Highlight], printedPage: (Int) -> String?, pdf: URL? = nil, bookID: String? = nil) -> String {
+        merge(existing: nil, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf, bookID: bookID)!
     }
 
     public static func merge(existing: String?, section: Section, highlights: [Highlight],
-                             printedPage: (Int) -> String?, pdf: URL? = nil) -> String {
+                             printedPage: (Int) -> String?, pdf: URL? = nil, bookID: String? = nil) -> String? {
         var out = "---\n\(marker)\n"
+        var written: Set<String> = ["section", "pdf-pages", "highlights"]
+        if pdf != nil { written.insert("book") }
+        if section.parent != nil { written.insert("parent") }
         if let pdf { out += "book: \(quoted(pdf.deletingPathExtension().lastPathComponent))\n" }
         out += "section: \(quoted(section.title))\n"
         if let parent = section.parent { out += "parent: \(quoted(parent))\n" }
         out += "pdf-pages: \(section.start + 1)-\(section.end + 1)\n"
-        out += "highlights: \(highlights.count)\n---\n"
+        out += "highlights: \(highlights.count)\n"
+        if let existing { for extra in extraFrontMatter(existing, dropping: written) { out += extra + "\n" } }
+        out += "---\n"
 
         var block = blockStart + "\n"
         let byPage = Dictionary(grouping: highlights, by: \.page)
@@ -53,25 +63,69 @@ public enum MarkdownExporter {
                 block += "\n## PDF p. \(page + 1)\n"
             }
             for h in byPage[page]!.sorted(by: readingOrder) {
-                block += line(h, pdf: pdf)
+                block += line(h, pdf: pdf, bookID: bookID)
             }
         }
         if !highlights.isEmpty { block += "\n" }
         block += blockEnd + "\n"
 
-        if let existing, let parts = split(existing) {
+        if let existing, !existing.isEmpty {
+            guard let parts = split(existing) else { return nil }
             return out + parts.before + block + parts.after
         }
         return out + "# \(section.title)\n\n" + block + "\n" + notesHeading + "\n\n"
     }
 
+    public enum ExistingFile {
+        case missing
+        case text(String)
+        case blocked
+    }
+
+    public static func readExisting(at url: URL) -> ExistingFile {
+        let fm = FileManager.default
+        let placeholder = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).icloud")
+        let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+        let notCurrent = values?.isUbiquitousItem == true && values?.ubiquitousItemDownloadingStatus != .current
+        if notCurrent || fm.fileExists(atPath: placeholder.path) {
+            try? fm.startDownloadingUbiquitousItem(at: url)
+            return .blocked
+        }
+        guard fm.fileExists(atPath: url.path) else { return .missing }
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return .blocked }
+        return .text(text)
+    }
+
+    public static func coordinated(_ url: URL, options: NSFileCoordinator.WritingOptions, _ body: (URL) throws -> Void) throws {
+        var coordinationError: NSError?
+        var thrown: Error?
+        NSFileCoordinator().coordinate(writingItemAt: url, options: options, error: &coordinationError) { target in
+            do { try body(target) } catch { thrown = error }
+        }
+        if let error = coordinationError ?? thrown { throw error }
+    }
+
     public static func hasUserContent(_ text: String) -> Bool {
+        if extraFrontMatter(text, dropping: generatedKeys).contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) { return true }
         guard let parts = split(text) else { return !body(text).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let rest = (parts.before + parts.after).split(separator: "\n").filter { line in
             let t = line.trimmingCharacters(in: .whitespaces)
             return !t.isEmpty && !t.hasPrefix("# ") && t != notesHeading
         }
         return !rest.isEmpty
+    }
+
+    private static func extraFrontMatter(_ text: String, dropping keys: Set<String>) -> [String] {
+        guard text.hasPrefix("---\n") else { return [] }
+        var extras: [String] = []
+        for l in text.split(separator: "\n", omittingEmptySubsequences: false).dropFirst() {
+            if l == "---" { break }
+            if l == Substring(marker) || l == Substring(oldMarker) { continue }
+            if let key = l.split(separator: ":", maxSplits: 1).first,
+               keys.contains(String(key).trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "\"'")))) { continue }
+            extras.append(String(l))
+        }
+        return extras
     }
 
     private static func body(_ text: String) -> Substring {
@@ -90,12 +144,12 @@ public enum MarkdownExporter {
     }
 
     public static func export(store: Store, sections: [Section], to directory: URL,
-                              printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil) throws -> ExportResult {
-        try export(highlights: store.highlights(), sections: sections, to: directory, printedPage: printedPage, pdf: pdf)
+                              printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil, bookID: String? = nil) throws -> ExportResult {
+        try export(highlights: store.highlights(), sections: sections, to: directory, printedPage: printedPage, pdf: pdf, bookID: bookID)
     }
 
     public static func export(highlights: [Highlight], sections: [Section], to directory: URL,
-                              printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil) throws -> ExportResult {
+                              printedPage: (Int) -> String? = { _ in nil }, pdf: URL? = nil, bookID: String? = nil) throws -> ExportResult {
         var grouped: [Int: [Highlight]] = [:]
         for h in highlights {
             if let s = Sections.section(for: h.page, in: sections) { grouped[s.id, default: []].append(h) }
@@ -109,16 +163,23 @@ public enum MarkdownExporter {
         for section in sections {
             let name = fileName(for: section)
             let url = directory.appendingPathComponent(name)
-            let existing = try? String(contentsOf: url, encoding: .utf8)
+            var existing: String?
+            switch readExisting(at: url) {
+            case .blocked:
+                current.insert(name)
+                continue
+            case .text(let text): existing = text
+            case .missing: break
+            }
             if let existing, !hasMarker(existing) { continue }
             let highlights = grouped[section.id] ?? []
             guard !highlights.isEmpty || existing.map(hasUserContent) == true else { continue }
             current.insert(name)
-            let text = merge(existing: existing, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf)
+            guard let text = merge(existing: existing, section: section, highlights: highlights, printedPage: printedPage, pdf: pdf, bookID: bookID) else { continue }
             if existing == text {
                 result.unchanged.append(name)
             } else {
-                try Data(text.utf8).write(to: url, options: .atomic)
+                try coordinated(url, options: .forReplacing) { try Data(text.utf8).write(to: $0, options: .atomic) }
                 result.written.append(name)
             }
         }
@@ -127,7 +188,7 @@ public enum MarkdownExporter {
         for name in files where !current.contains(name) {
             let url = directory.appendingPathComponent(name)
             guard let text = try? String(contentsOf: url, encoding: .utf8), hasMarker(text), !hasUserContent(text) else { continue }
-            try fm.removeItem(at: url)
+            try coordinated(url, options: .forDeleting) { try fm.removeItem(at: $0) }
             result.removed.append(name)
         }
         return result
@@ -138,7 +199,7 @@ public enum MarkdownExporter {
         guard lines.first == "---" else { return false }
         for l in lines.dropFirst() {
             if l == "---" { return false }
-            if l == Substring(marker) { return true }
+            if l == Substring(marker) || l == Substring(oldMarker) { return true }
         }
         return false
     }
@@ -153,8 +214,8 @@ public enum MarkdownExporter {
             .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    private static func line(_ h: Highlight, pdf: URL?) -> String {
-        let open = "[open](\(link(page: h.page, highlight: h.id, pdf: pdf))) <!-- fa:\(h.id) -->"
+    private static func line(_ h: Highlight, pdf: URL?, bookID: String?) -> String {
+        let open = "[open](\(link(page: h.page, highlight: h.id, pdf: pdf, bookID: bookID))) <!-- fa:\(h.id) -->"
         if h.highlightColor == .noteOnly {
             return "- Note: \(oneLine(h.note).replacingOccurrences(of: "==", with: "\\=\\=")) \(open)\n"
         }

@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import FACore
 import PDFKit
@@ -311,7 +312,7 @@ final class SelfCheck {
         let native = document.page(at: graves)?.annotations.filter { $0.type == "Highlight" && $0.userName?.hasPrefix("fa") != true }.count ?? -1
         check("imported Preview annotations hidden in memory", native == 0, native)
 
-        model.refreshHistory()
+        model.history = (try? store.sessions()) ?? []
         let sessions = model.history
         check("history has edit and import sessions", sessions.count == 2 && Set(sessions.map(\.kind)) == [.edit, .import],
               sessions.map { "\($0.kind) ops=\($0.opCount) pages=\($0.pages.count)" })
@@ -320,7 +321,7 @@ final class SelfCheck {
             model.confirmUndo()
             let remaining = (try? store.highlights()) ?? []
             check("undo edit session keeps later import", remaining.count == 56 && !remaining.contains { $0.id == h.id }, remaining.count)
-            model.refreshHistory()
+            model.history = (try? store.sessions()) ?? []
             check("undo is logged as its own session", model.history.contains { $0.kind == .undo && $0.undoes == edit.id })
         }
 
@@ -333,7 +334,7 @@ final class SelfCheck {
         check("re-export changes nothing", second?.written.isEmpty == true && second?.unchanged.count == files.count)
         if let gi = files.first(where: { $0.contains("Gastrointestinal") }),
            let text = try? String(contentsOf: exportDir.appendingPathComponent(gi), encoding: .utf8) {
-            check("export has page links", text.contains("fa-reader://open?page="), String(text.prefix(600)))
+            check("export has page links", text.contains("rowlight://open?page="), String(text.prefix(600)))
         }
 
         model.handle(url: URL(string: "fa-reader://open?page=413")!)
@@ -571,6 +572,7 @@ final class SelfCheck {
                     model.select(nil)
                     model.pdfView.clearSelection()
                     model.tidyHighlights()
+                    await model.tidyTask?.value
                     let tidied = ((try? store.highlights(page: liver)) ?? []).filter { $0.source == "app" }
                     check("Tidy splits the stack so no two highlights overlap and fragments become whole words",
                           overlapping(page: liver).isEmpty && tidied.contains { $0.highlightColor == .pink && $0.text == "centrilobular" },
@@ -669,11 +671,13 @@ final class SelfCheck {
             let mine = "\nThyroid storm: treat with the 4 Ps. #mine\n"
             try? (model.marky.text + mine).write(to: url, atomically: true, encoding: .utf8)
             model.refreshNotes(force: true)
+            await waitFor { !model.notesLoading }
             if let sel = select("Other causes", page: graves) {
                 model.pdfView.setCurrentSelection(sel, animate: false)
                 model.applyColor(.yellow)
             }
             model.exportQuietly()
+            await waitFor { !model.notesLoading }
             let onDisk = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
             check("notes keep what you wrote when highlights change", onDisk.contains("treat with the 4 Ps. #mine") && onDisk.contains("Other causes"),
                   String(onDisk.suffix(300)))
@@ -699,7 +703,8 @@ final class SelfCheck {
             await waitFor { model.pdfURL == other }
             await pause(0.3)
             check("opening another PDF switches book", model.pdfURL == other && model.pageCount == 1, model.bookTitle)
-            check("each book has its own data folder", model.store?.folder.root.lastPathComponent == "one.fa-reader")
+            let folderName = model.store?.folder.root.lastPathComponent ?? ""
+            check("each book has its own data folder", folderName == "one.fa-reader" || BookIdentity.isContentHash(folderName), folderName)
             let link = MarkdownExporter.link(page: 412, pdf: original)
             NSApp.delegate?.application?(NSApp, open: [URL(string: link)!])
             await waitFor { model.pdfURL == original }
@@ -710,3 +715,4 @@ final class SelfCheck {
         }
     }
 }
+#endif

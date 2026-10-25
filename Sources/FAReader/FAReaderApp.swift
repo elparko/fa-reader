@@ -7,7 +7,7 @@ struct FAReaderApp: App {
     @StateObject private var model = AppModel.shared
 
     var body: some Scene {
-        Window("FA Reader", id: "main") {
+        Window(LocalizedStringKey(stringLiteral: Branding.displayName), id: "main") {
             ContentView(model: model)
                 .frame(minWidth: 480, minHeight: 400)
         }
@@ -29,7 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if AppModel.shared.selfCheck != nil || AppModel.shared.measureOpen {
+#if !APPSTORE
+        if AppModel.shared.isTestRun {
             NSApp.setActivationPolicy(.accessory)
             for window in NSApp.windows where !CommandLine.arguments.contains("--visible") {
                 window.alphaValue = 0
@@ -40,6 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
             Updater.checkDaily()
         }
+#else
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+#endif
+#if !APPSTORE
         if CommandLine.arguments.contains("--print-update") {
             Task {
                 let token = Updater.token()
@@ -49,12 +55,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 exit(0)
             }
         }
+#endif
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationWillTerminate(_ notification: Notification) {
         AppModel.shared.flushNote()
+        AppModel.shared.saveNotes()
         AppModel.shared.flushLog()
     }
 }
@@ -62,24 +70,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct AppCommands: Commands {
     @ObservedObject var model: AppModel
 
+    private var textFocused: Bool {
+        model.noteFocused || model.searchFieldFocused || NSApp.keyWindow?.firstResponder is NSText
+    }
+
     var body: some Commands {
+#if !APPSTORE
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") { Task { await Updater.check(interactive: true) } }
         }
+#endif
         CommandGroup(replacing: .newItem) {
             Button("Open…") { model.openPanel() }
                 .keyboardShortcut("o")
             Menu("Open Recent") {
-                ForEach(model.recentBooks, id: \.self) { path in
-                    Button((path as NSString).lastPathComponent) { model.openRecent(path) }
+                ForEach(model.recentBooks) { book in
+                    Button(book.name) { model.openRecent(book) }
                 }
                 Divider()
                 Button("Clear Menu") { model.clearRecent() }
             }
+            .disabled(model.recentBooks.isEmpty)
         }
         CommandGroup(after: .importExport) {
             Divider()
             Button("Import from Preview…") { model.beginImport() }
+                .disabled(model.store == nil)
+            Button("Import Highlights from Folder…") { model.importSidecarFolder() }
                 .disabled(model.store == nil)
             Button("Export Markdown") { model.exportMarkdown() }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
@@ -92,8 +109,8 @@ struct AppCommands: Commands {
                 .disabled(model.store == nil)
         }
         CommandGroup(replacing: .undoRedo) {
-            Button(model.noteFocused || model.searchFieldFocused ? "Undo" : model.undoTitle) { model.undo() }.keyboardShortcut("z")
-            Button(model.noteFocused || model.searchFieldFocused ? "Redo" : model.redoTitle) { model.redo() }
+            Button(textFocused ? "Undo" : model.undoTitle) { model.undo() }.keyboardShortcut("z")
+            Button(textFocused ? "Redo" : model.redoTitle) { model.redo() }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
         }
         CommandMenu("Highlight") {
@@ -109,7 +126,7 @@ struct AppCommands: Commands {
                 model.deleteFromMenu()
             }
                 .keyboardShortcut(.delete, modifiers: .command)
-                .disabled((model.selectedID == nil && model.barMode != .selection(erase: true)) || model.noteFocused)
+                .disabled((model.selectedID == nil && model.barMode != .selection(erase: true)) || model.noteFocused || NSApp.keyWindow?.firstResponder is NSText)
             Button("Copy Highlight Text") { _ = model.copySelectedHighlight() }
                 .disabled(model.selectedID == nil)
             Divider()
@@ -134,6 +151,14 @@ struct AppCommands: Commands {
                 .disabled(model.results.isEmpty)
             Button("Previous Result") { model.moveResult(-1) }.keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(model.results.isEmpty)
+        }
+        CommandGroup(replacing: .help) {
+            Button("Rowlight Support") {
+                NSWorkspace.shared.open(URL(string: "https://www.elparko.com/apps/rowlight/support/")!)
+            }
+            Button("Privacy Policy") {
+                NSWorkspace.shared.open(URL(string: "https://www.elparko.com/apps/rowlight/privacy/")!)
+            }
         }
     }
 }

@@ -1,6 +1,10 @@
 .build/
 build/
 .swiftpm/
-*.xcodeproj/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/**/xcuserdata/
+*.xcuserstate
 .DS_Store
+__pycache__/
+*.pyc
 .claude/
