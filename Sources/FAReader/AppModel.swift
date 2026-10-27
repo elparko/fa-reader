@@ -1470,6 +1470,11 @@ final class AppModel: ObservableObject {
         if let root = window.contentView?.superview, let field = find(root) {
             window.makeFirstResponder(field)
             showResultsPanel = true
+            // SwiftUI's searchable can reclaim focus while it re-renders; assert again once it settles.
+            DispatchQueue.main.async { [weak window, weak field] in
+                guard let window, let field, !self.searchFieldFocused else { return }
+                window.makeFirstResponder(field)
+            }
         }
     }
 
@@ -1483,6 +1488,7 @@ final class AppModel: ObservableObject {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let code = event.keyCode
             let plain = event.modifierFlags.intersection([.command, .option, .control]).isEmpty
+            let cmdOnly = event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command
             let window = event.window
             let digit = event.charactersIgnoringModifiers.flatMap { Int($0) }
             let handled = MainActor.assumeIsolated { () -> Bool in
@@ -1510,6 +1516,10 @@ final class AppModel: ObservableObject {
                         model.pickColor(c)
                         return true
                     }
+                }
+                if code == 3, cmdOnly, window != nil, window === model.pdfView.window {
+                    model.focusSearch()
+                    return true
                 }
                 if code == 53, plain, model.detailsShown,
                    window === model.popover?.contentViewController?.view.window || window === model.pdfView.window {
